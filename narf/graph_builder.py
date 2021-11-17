@@ -62,29 +62,21 @@ def build_and_run(datasets, build_function, output_file):
 
     print(results)
 
+    f = ROOT.TFile.Open(output_file, "RECREATE")
     for dataset, res, hweight in zip (datasets, results, hweights):
-        lumi = None
-        if dataset.target_lumi is not None:
-            lumi = dataset.target_lumi
-        elif dataset.target_data is not None:
-            lumi = lumisums[dataset.target_data].GetValue()
+        folder = f.mkdir(dataset.name)
+        folder.cd()
 
         scaleweight = None
-        if lumi is not None and dataset.xsec is not None:
-            scaleweight = lumi*xsec/hweight.GetSumOfWeights()
-        for r in res:
-            if hasattr(r, "GetName") and hasattr(r, "SetName"):
-                r.SetName(f"{r.GetName()}_{dataset.name}")
-            if hasattr(r, "Scale") and scaleweight is not None:
-                print("scaling", r.GetName())
-                r.Scale(scaleweight)
+        if dataset.name in lumisums:
+            hlumi = ROOT.TH1D("lumi", "lumi", 1, 0.5, 1.5)
+            lumi = lumisums[dataset.name].GetValue()
+            hlumi.Fill(1.0, lumi)
+            hlumi.Write()
+        hweight.Write()
 
-
-    f = ROOT.TFile.Open(output_file, "RECREATE")
-    f.cd()
-    for res in results:
         for r in res:
-            print("writing")
             r.Write()
+
     f.Close()
 
