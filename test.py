@@ -7,9 +7,10 @@ from datasets import datasets2016
 
 #import gc
 
-datasets = [data, zmc]
+datasets = datasets2016.allDatasets()
 #datasets = [zmc, data]
 #datasets = [zmc]
+print("datasets are", list(datasets.values()))
 
 def build_graph(df, dataset):
     df = df.Filter("nMuon > 0")
@@ -34,4 +35,4 @@ def build_graph(df, dataset):
 
     return results, hweight
 
-narf.build_and_run(datasets, build_graph, "testout.root")
+narf.build_and_run(datasets.values(), build_graph, "testout.root")
