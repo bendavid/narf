@@ -4,6 +4,7 @@ from .lumitools import make_lumihelper, make_jsonhelper
 def build_and_run(datasets, build_function, output_file):
     results = []
     hweights = []
+    evtcounts = []
     chains = []
     lumisums = {}
 
@@ -45,12 +46,15 @@ def build_and_run(datasets, build_function, output_file):
         print("event df")
         df = ROOT.ROOT.RDataFrame(chain)
         if jsonhelper is not None:
-            lumidf = lumidf.Filter(jsonhelper, ["run", "luminosityBlock"], "jsonhelper")
+            df = df.Filter(jsonhelper, ["run", "luminosityBlock"], "jsonhelper")
+
+        evtcount = df.Count()
 
         res, hweight = build_function(df, dataset)
 
         results.append(res)
         hweights.append(hweight)
+        evtcounts.append(evtcount)
 
     if lumisums:
         ROOT.ROOT.RDF.RunGraphs(lumisums.values())
@@ -58,12 +62,17 @@ def build_and_run(datasets, build_function, output_file):
     for name, val in lumisums.items():
         print(name, val.GetValue())
 
-    ROOT.ROOT.RDF.RunGraphs(hweights)
+    ROOT.ROOT.RDF.RunGraphs(evtcounts)
 
     print(results)
 
     f = ROOT.TFile.Open(output_file, "RECREATE")
-    for dataset, res, hweight in zip (datasets, results, hweights):
+    for dataset, res, hweight, evtcount in zip (datasets, results, hweights, evtcounts):
+
+        if hweight.GetEntries() != evtcount.GetValue():
+            errmsg = f"Number of events for dataset {dataset.name} used to fill weight statistics {hweight.GetEntries()} not consistent with total number of events processed (after lumi filtering if applicable): {evtcount.GetValue()}"
+            raise ValueError(errmsg)
+
         folder = f.mkdir(dataset.name)
         folder.cd()
 
@@ -76,7 +85,10 @@ def build_and_run(datasets, build_function, output_file):
         hweight.Write()
 
         for r in res:
-            r.Write()
+            if isinstance(r.GetValue(), ROOT.TObject):
+              r.Write()
+            else:
+              folder.WriteObject(r.GetValue(), r.name)
 
     f.Close()
 

@@ -1,38 +1,53 @@
 import ROOT
-#ROOT.gInterpreter.ProcessLine(".O3")
-ROOT.ROOT.EnableImplicitMT()
+ROOT.gInterpreter.ProcessLine(".O3")
+ROOT.ROOT.EnableImplicitMT(128)
 
 import narf
 from datasets import datasets2016
 
-#import gc
-
 datasets = datasets2016.allDatasets()
-#datasets = [zmc, data]
-#datasets = [zmc]
-print("datasets are", list(datasets.values()))
+
+axis_pt = ROOT.boost.histogram.axis.regular[""](29, 26., 55., "pt")
+axis_eta = ROOT.boost.histogram.axis.regular[""](48, -2.4, 2.4, "eta")
+axis_charge = ROOT.boost.histogram.axis.category["int"]([-1, 1], "charge");
+
+axis_pdf_idx = ROOT.boost.histogram.axis.integer[""](0, 103, "pdf")
 
 def build_graph(df, dataset):
-    df = df.Filter("nMuon > 0")
-    df = df.Define("Muon0_pt", "Muon_pt[0]")
-    df = df.Define("Muon0_eta", "Muon_eta[0]")
+    results = []
 
     if dataset.is_data:
         df = df.Define("weight", "1.0")
     else:
         df = df.Define("weight", "std::copysign(1.0, genWeight)")
 
-    df = df.Define("one", "1.0")
+    df = df.DefinePerSample("one", "1.")
+    hweight = df.Histo1D(("hweight", "", 1, 0.5, 1.5), "one", "weight")
 
-    hweight = df.Histo1D(("sumweights", "", 1, 0.5, 1.5), "one", "weight")
+    df = df.Define("vetoMuons", "Muon_pt > 10 && Muon_looseId && abs(Muon_eta) < 2.4 && abs(Muon_dxybs) < 0.05")
 
-    hpt = df.Histo1D(("hpt", "", 35, 25., 60.), "Muon0_pt", "weight")
-    heta = df.Histo1D(("heta", "", 48, -2.4, 2.4), "Muon0_eta", "weight")
+    df = df.Filter("Sum(vetoMuons) == 1")
 
-    #hpt.GetResult()
-    results = [hpt, heta]
-    #results = [hpt]
+    df = df.Define("goodMuons", "vetoMuons && Muon_mediumId")
+
+    df = df.Filter("Sum(goodMuons) == 1")
+
+    df = df.Define("goodMuons_Pt0", "Muon_pt[goodMuons][0]")
+    df = df.Define("goodMuons_Eta0", "Muon_eta[goodMuons][0]")
+    df = df.Define("goodMuons_Charge0", "Muon_charge[goodMuons][0]")
+
+    hptetacharge = df.HistoBoost("hptetacharge", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight"])
+    results.append(hptetacharge)
+
+    if not dataset.is_data:
+
+        df = df.Define("pdfweight", "weight*LHEPdfWeight")
+
+        df = df.DefinePerSample("pdfidx", "std::array<int, 103> res; std::iota(res.begin(), res.end(), 0); return res;")
+
+        hptetachargepdf = df.HistoBoost("hptetachargepdf", [axis_pt, axis_eta, axis_charge, axis_pdf_idx], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", "pdfweight"])
+        results.append(hptetachargepdf)
 
     return results, hweight
 
-narf.build_and_run(datasets.values(), build_graph, "testout.root")
+narf.build_and_run(datasets, build_graph, "testout.root")
