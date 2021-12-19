@@ -1,16 +1,33 @@
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--nThreads", type=int, help="number of threads", default=None)
+args = parser.parse_args()
+
 import ROOT
 ROOT.gInterpreter.ProcessLine(".O3")
-ROOT.ROOT.EnableImplicitMT(128)
+if args.nThreads is not None:
+    if args.nThreads > 1:
+        ROOT.ROOT.EnableImplicitMT(args.nThreads)
+else:
+    ROOT.ROOT.EnableImplicitMT()
 
 import narf
 from datasets import datasets2016
 
 datasets = datasets2016.allDatasets()
 
+boost_hist_default = ROOT.boost.histogram.use_default
+boost_hist_options_none = ROOT.boost.histogram.axis.option.none_t
+
+# standard regular axes
 axis_pt = ROOT.boost.histogram.axis.regular[""](29, 26., 55., "pt")
 axis_eta = ROOT.boost.histogram.axis.regular[""](48, -2.4, 2.4, "eta")
-axis_charge = ROOT.boost.histogram.axis.category["int"]([-1, 1], "charge");
 
+# categorical axis with no overflow
+axis_charge = ROOT.boost.histogram.axis.category["int", boost_hist_default, boost_hist_options_none]([-1, 1], "charge");
+
+# integer axis
 axis_pdf_idx = ROOT.boost.histogram.axis.integer[""](0, 103, "pdf")
 
 def build_graph(df, dataset):

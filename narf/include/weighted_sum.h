@@ -1,9 +1,3 @@
-// Copyright 2015-2018 Hans Dembinski
-//
-// Distributed under the Boost Software License, version 1.0.
-// (See accompanying file LICENSE_1_0.txt
-// or copy at http://www.boost.org/LICENSE_1_0.txt)
-
 #ifndef NARF_WEIGHTED_SUM_H
 #define NARF_WEIGHTED_SUM_H
 
@@ -99,5 +93,25 @@ namespace narf {
 
 } // namespace narf
 
+
+#ifndef BOOST_HISTOGRAM_DOXYGEN_INVOKED
+namespace std {
+template <class T, class U, bool B1, bool B2>
+struct common_type<narf::weighted_sum<T, B1>,
+                   narf::weighted_sum<U, B2>> {
+  using type = narf::weighted_sum<common_type_t<T, U>, (B1 || B2)>;
+};
+
+template <class T, class U, bool B1>
+struct common_type<narf::weighted_sum<T, B1>, U> {
+  using type = narf::weighted_sum<common_type_t<T, U>, B1>;
+};
+
+template <class T, class U, bool B2>
+struct common_type<T, narf::weighted_sum<U, B2>> {
+  using type = narf::weighted_sum<common_type_t<T, U>, B2>;
+};
+} // namespace std
+#endif
 
 #endif

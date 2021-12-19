@@ -3,6 +3,7 @@
 
 #include <boost/histogram.hpp>
 #include "weighted_sum.h"
+#include <ROOT/RResultPtr.hxx>
 
 namespace narf {
   using namespace boost::histogram;
@@ -30,6 +31,26 @@ namespace narf {
   book_helper(DFType &df, Helper &&helper, const std::vector<std::string> &colnames) {
     return df.template Book<ColTypes...>(std::forward<Helper>(helper), colnames);
   }
+
+//   template <typename HIST>
+//   void boost_histogram_streamer(TBuffer &buf, void *objPtr) {
+//     HIST *myObj = static_cast<HIST*>(objPtr);
+//     if (buf.IsReading()) {
+//       std::cout << "custom streamer reading" << std::endl;
+// //       buf >> myObj->value1;
+// //       buf >> myObj->value2;
+//     } else {
+//       std::cout << "custom streamer writing" << std::endl;
+// //       buf << myObj->value1;
+// //       buf << myObj->value2;
+//     }
+//   }
+//
+//   template <typename HIST>
+//   void set_custom_streamer() {
+//     TClass *cl = TClass::GetClass<HIST>();
+//     cl->SetStreamerFunc(&boost_histogram_streamer<HIST>);
+//   }
 
 }
 

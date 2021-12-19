@@ -14,10 +14,10 @@ def _histo_boost(df, name, axes, cols):
 
 @ROOT.pythonization("RInterface<", ns="ROOT::RDF", is_prefix=True)
 def pythonize_rdataframe(klass):
-    print("doing pythonization")
+    print("doing RDF pythonization")
     klass.HistoBoost = _histo_boost
 
-#@ROOT.pythonization("histogram<", ns="boost::histogram", is_prefix=True)
-#def pythonize_boosthist(klass):
-    #print("doing pythonization")
-    #klass.BoostHistoAtomicWithError = _boost_histo_atomic_with_error
+@ROOT.pythonization("histogram<", ns="boost::histogram", is_prefix=True)
+def pythonize_boosthist(klass):
+    print("doing boost histogram pythonization")
+    #ROOT.narf.set_custom_streamer[klass]()
