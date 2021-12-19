@@ -14,6 +14,12 @@ namespace narf {
    using namespace ROOT::Internal::RDF;
    using namespace boost::histogram;
 
+   template <typename axes_type>
+   struct is_static : std::false_type {};
+
+   template <typename... Axes>
+   struct is_static<std::tuple<Axes...>> : std::true_type {};
+
    template <typename HIST>
    class FillBoostHelperAtomic : public ROOT::Detail::RDF::RActionImpl<FillBoostHelperAtomic<HIST>> {
       std::shared_ptr<HIST> fObject;
@@ -70,8 +76,30 @@ namespace narf {
          using namespace boost::histogram;
          auto &thisSlotH = *fObject;
 
-         constexpr unsigned int N = std::tuple_size<A>::value;
-         thisSlotH(std::get<Idxs>(tup)..., weight(std::get<N-1>(tup)));
+         constexpr auto N = std::tuple_size<A>::value;
+
+         // handle filling both with and without weight, with compile time
+         // checking where possible
+         if constexpr (is_static<typename HIST::axes_type>::value) {
+            constexpr auto rank = std::tuple_size<typename HIST::axes_type>::value;
+            constexpr bool weighted = N != rank;
+            if constexpr (weighted) {
+               thisSlotH(std::get<Idxs>(tup)..., weight(std::get<N-1>(tup)));
+            }
+            else {
+               thisSlotH(std::get<Idxs>(tup)..., std::get<N-1>(tup));
+            }
+         }
+         else {
+            const auto rank = fObject->rank();
+            const bool weighted = N != rank;
+            if (weighted) {
+               thisSlotH(std::get<Idxs>(tup)..., weight(std::get<N-1>(tup)));
+            }
+            else {
+               thisSlotH(std::get<Idxs>(tup)..., std::get<N-1>(tup));
+            }
+         }
       }
 
       template <typename A, typename T, T... Idxs>
@@ -79,9 +107,30 @@ namespace narf {
          using namespace boost::histogram;
          auto &thisSlotH = *fObject;
 
-         constexpr unsigned int N = std::tuple_size<A>::value;
+         constexpr auto N = std::tuple_size<A>::value;
 
-         thisSlotH(*std::get<Idxs>(tup)..., weight(*std::get<N-1>(tup)));
+         // handle filling both with and without weight, with compile time
+         // checking where possible
+         if constexpr (is_static<typename HIST::axes_type>::value) {
+            constexpr auto rank = std::tuple_size<typename HIST::axes_type>::value;
+            constexpr bool weighted = N != rank;
+            if constexpr (weighted) {
+               thisSlotH(*std::get<Idxs>(tup)..., weight(*std::get<N-1>(tup)));
+            }
+            else {
+               thisSlotH(*std::get<Idxs>(tup)..., *std::get<N-1>(tup));
+            }
+         }
+         else {
+            const auto rank = fObject->rank();
+            const bool weighted = N != rank;
+            if (weighted) {
+               thisSlotH(*std::get<Idxs>(tup)..., weight(*std::get<N-1>(tup)));
+            }
+            else {
+               thisSlotH(*std::get<Idxs>(tup)..., *std::get<N-1>(tup));
+            }
+         }
       }
 
       template <std::size_t ColIdx, typename End_t, typename... Its>
@@ -160,7 +209,6 @@ namespace narf {
    };
 
 }
-
 
 #endif
 
