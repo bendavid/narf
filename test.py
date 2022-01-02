@@ -2,6 +2,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--nThreads", type=int, help="number of threads", default=None)
+parser.add_argument("--useBoost", type=bool, help="user boost histograms", default=False)
 args = parser.parse_args()
 
 import ROOT
@@ -12,8 +13,13 @@ if args.nThreads is not None:
 else:
     ROOT.ROOT.EnableImplicitMT()
 
+#ROOT.TTreeProcessorMT.SetTasksPerWorkerHint(1)
+
+
+
 import narf
 from datasets import datasets2016
+import hist
 
 datasets = datasets2016.allDatasets()
 
@@ -21,14 +27,20 @@ boost_hist_default = ROOT.boost.histogram.use_default
 boost_hist_options_none = ROOT.boost.histogram.axis.option.none_t
 
 # standard regular axes
-axis_pt = ROOT.boost.histogram.axis.regular[""](29, 26., 55., "pt")
-axis_eta = ROOT.boost.histogram.axis.regular[""](48, -2.4, 2.4, "eta")
+#axis_pt = ROOT.boost.histogram.axis.regular[""](29, 26., 55., "pt")
+axis_pt = hist.axis.Regular(29, 26., 55.)
+
+#axis_eta = ROOT.boost.histogram.axis.regular[""](48, -2.4, 2.4, "eta")
+axis_eta = hist.axis.Regular(48, -2.4, 2.4)
 
 # categorical axis with no overflow
-axis_charge = ROOT.boost.histogram.axis.category["int", boost_hist_default, boost_hist_options_none]([-1, 1], "charge");
+#axis_charge = ROOT.boost.histogram.axis.category["int", boost_hist_default, boost_hist_options_none]([-1, 1], "charge");
+#axis_charge = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False)
+axis_charge = hist.axis.Regular(2, -2., 2.)
 
 # integer axis
-axis_pdf_idx = ROOT.boost.histogram.axis.integer[""](0, 103, "pdf")
+#axis_pdf_idx = ROOT.boost.histogram.axis.integer[""](0, 103, "pdf")
+axis_pdf_idx = hist.axis.Integer(0, 103)
 
 def build_graph(df, dataset):
     results = []
@@ -53,17 +65,34 @@ def build_graph(df, dataset):
     df = df.Define("goodMuons_Eta0", "Muon_eta[goodMuons][0]")
     df = df.Define("goodMuons_Charge0", "Muon_charge[goodMuons][0]")
 
-    hptetacharge = df.HistoBoost("hptetacharge", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight"])
+    if args.useBoost:
+        #hptetacharge = df.HistoBoost("hptetacharge", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight"])
+        hptetacharge = df.HistoBoost("hptetacharge", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight"])
+    else:
+        hptetacharge = df.Histo3D(("hptetacharge", "", 29, 26., 55., 48, -2.4, 2.4, 2, -2., 2.), "goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight")
     results.append(hptetacharge)
 
     if not dataset.is_data:
 
-        df = df.Define("pdfweight", "weight*LHEPdfWeight")
+        #df = df.Define("pdfweight", "weight*LHEPdfWeight")
+
+        #df = df.DefinePerSample("pdfidx", "std::array<int, 103> res; std::iota(res.begin(), res.end(), 0); return res;")
+
+        #hptetachargepdf = df.HistoBoost("hptetachargepdf", [axis_pt, axis_eta, axis_charge, axis_pdf_idx], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", "pdfweight"])
+        #results.append(hptetachargepdf)
 
         df = df.DefinePerSample("pdfidx", "std::array<int, 103> res; std::iota(res.begin(), res.end(), 0); return res;")
 
-        hptetachargepdf = df.HistoBoost("hptetachargepdf", [axis_pt, axis_eta, axis_charge, axis_pdf_idx], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", "pdfweight"])
-        results.append(hptetachargepdf)
+
+        for i in range(1):
+
+            df = df.Define(f"pdfweight_{i}", "weight*LHEPdfWeight")
+
+            if args.useBoost:
+                hptetachargepdf = df.HistoBoost(f"hptetachargepdf_{i}", [axis_pt, axis_eta, axis_charge, axis_pdf_idx], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", f"pdfweight_{i}"])
+            else:
+                hptetachargepdf = df.HistoND((f"hptetachargepdf_{i}", "", 4, [29, 48, 2, 103], [26., -2.4, -2., -0.5], [55., 2.4, 2., 102.5]), ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", f"pdfweight_{i}"])
+            results.append(hptetachargepdf)
 
     return results, hweight
 

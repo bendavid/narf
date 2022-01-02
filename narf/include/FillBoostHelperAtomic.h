@@ -78,6 +78,8 @@ namespace narf {
 
          constexpr auto N = std::tuple_size<A>::value;
 
+//          std::cout << "filling from scalar" << std::endl;
+
          // handle filling both with and without weight, with compile time
          // checking where possible
          if constexpr (is_static<typename HIST::axes_type>::value) {
@@ -100,6 +102,9 @@ namespace narf {
                thisSlotH(std::get<Idxs>(tup)..., std::get<N-1>(tup));
             }
          }
+
+//          std::cout << "hist sum in FillHist: " << algorithm::sum(thisSlotH).value() << std::endl;
+
       }
 
       template <typename A, typename T, T... Idxs>
@@ -108,6 +113,8 @@ namespace narf {
          auto &thisSlotH = *fObject;
 
          constexpr auto N = std::tuple_size<A>::value;
+
+//          std::cout << "filling from vector" << std::endl;
 
          // handle filling both with and without weight, with compile time
          // checking where possible
@@ -170,6 +177,9 @@ namespace narf {
          const auto xst = std::forward_as_tuple(x...);
 
          FillHist(xst, std::make_index_sequence<N-1>{});
+
+//          std::cout << "hist sum in Exec: " << algorithm::sum(*fObject).value() << std::endl;
+
       }
 
       // at least one container argument
@@ -199,7 +209,11 @@ namespace narf {
          ExecLoop<colidx>(slot, xrefend, MakeBegin(xs)...);
       }
 
-      void Finalize() {}
+      void Finalize() {
+        const double sumval = algorithm::sum(*fObject).value();
+        std::cout << "hist sum in Finalize: " << sumval << std::endl;
+//         std::cout << "hist bin content in Finalize" << fObject->at(1, 1, 1).value() << std::endl;
+      }
 
       std::shared_ptr<HIST> GetResultPtr() const {
          return fObject;

@@ -7,7 +7,7 @@ import pathlib
 lumicsv = f"{pathlib.Path(__file__).parent.parent}/data/bylsoutput.csv"
 lumijson = f"{pathlib.Path(__file__).parent.parent}/data/Cert_271036-284044_13TeV_Legacy2016_Collisions16_JSON.txt"
 
-def allDatasets(istest=True):
+def allDatasets(istest=False):
     data_files = data_files_ if not istest else data_files_[:10]
     zmc_files = zmc_files_ if not istest else zmc_files_[:10]
     wplus_files = wplus_files_ if not istest else wplus_files_[:10]
@@ -36,7 +36,11 @@ def allDatasets(istest=True):
                     xsec = 1990.5,
                     )
 
-    return [data, zmc, wplus, wminus]
+    #return [data, zmc, wplus, wminus]
+    #return [zmc, wplus, wminus]
+    return [zmc]
+    #return [data]
+    #return [wplus, wminus]
 
 def buildXrdFileList(path, xrd):
     xrdpath = path[path.find('/store'):]
@@ -53,3 +57,4 @@ dataPostF_files_ = glob.glob("/scratch/shared/originalNANO/NanoV8Data_Mar2021/Ru
 dataG_files_ = glob.glob("/scratch/shared/originalNANO/NanoV8Data_Mar2021/Run2016G/*")
 dataH_files_ = glob.glob("/scratch/shared/originalNANO/NanoV8Data_Mar2021/Run2016H/*")
 data_files_ = dataG_files_+dataH_files_+dataPostF_files_
+#data_files_ = 100*data_files_

@@ -5,6 +5,7 @@
 #include <boost/core/nvp.hpp>
 #include <boost/histogram/fwd.hpp> // for weighted_sum<>
 #include <type_traits>
+#include <iostream>
 
 namespace narf {
 
@@ -38,6 +39,7 @@ namespace narf {
     weighted_sum& operator++() {
       ++sum_of_weights_;
       ++sum_of_weights_squared_;
+//       std::cout << "increment 0" << std::endl;
       return *this;
     }
 
@@ -45,6 +47,7 @@ namespace narf {
     weighted_sum& operator+=(const weight_type<value_type>& w) {
       sum_of_weights_ += w.value;
       sum_of_weights_squared_ += w.value * w.value;
+//       std::cout << "increment 1: sum of weights = " << sum_of_weights_.load() <<  " value = " << w.value << std::endl;
       return *this;
     }
 
@@ -52,6 +55,9 @@ namespace narf {
     weighted_sum& operator+=(const weighted_sum& rhs) {
       sum_of_weights_ += rhs.sum_of_weights_;
       sum_of_weights_squared_ += rhs.sum_of_weights_squared_;
+//       std::cout << "increment 2" << std::endl;
+//       std::cout << "increment 2: sum of weights = " << sum_of_weights_.load() <<  " rhs sum of weights = " << rhs.sum_of_weights_.load() << std::endl;
+
       return *this;
     }
 
@@ -70,13 +76,13 @@ namespace narf {
     bool operator!=(const weighted_sum& rhs) const noexcept { return !operator==(rhs); }
 
     /// Return value of the sum.
-    const_reference value() const noexcept { return sum_of_weights_; }
+    value_type value() const noexcept { return sum_of_weights_; }
 
     /// Return estimated variance of the sum.
-    const_reference variance() const noexcept { return sum_of_weights_squared_; }
+    value_type variance() const noexcept { return sum_of_weights_squared_; }
 
     // lossy conversion must be explicit
-    explicit operator const_reference() const { return sum_of_weights_; }
+    explicit operator value_type() const { return sum_of_weights_; }
 
     template <class Archive>
     void serialize(Archive& ar, unsigned /* version */) {

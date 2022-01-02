@@ -57,12 +57,18 @@ def build_and_run(datasets, build_function, output_file):
         evtcounts.append(evtcount)
 
     if lumisums:
+        print("begin lumi loop")
         ROOT.ROOT.RDF.RunGraphs(lumisums.values())
+        print("end lumi loop")
 
     for name, val in lumisums.items():
         print(name, val.GetValue())
 
+    print("begin event loop")
     ROOT.ROOT.RDF.RunGraphs(evtcounts)
+    print("done event loop")
+    #for evtcount in evtcounts:
+        #evtcount.GetValue()
 
     print(results)
 
@@ -85,10 +91,17 @@ def build_and_run(datasets, build_function, output_file):
         hweight.Write()
 
         for r in res:
+            print(type(r.GetValue()))
             if isinstance(r.GetValue(), ROOT.TObject):
               r.Write()
             else:
-              folder.WriteObject(r.GetValue(), r.name)
+              #print("access test", r.rank())
+              #print("access test", r.GetValue()[1,1,1])
+              #print("access test direct", r[1,1,1])
+              print("sum", r.sum())
+              print("sum with overflow", r.sum(flow=True))
+
+              #folder.WriteObject(r.GetValue(), r.name)
 
     f.Close()
 
