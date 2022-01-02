@@ -3,6 +3,8 @@ import boost_histogram as bh
 import hist
 from hashlib import sha256
 import time
+import math
+import cppyy.ll
 
 ROOT.gInterpreter.Declare('#include "histutils.h"')
 ROOT.gInterpreter.Declare('#include "FillBoostHelperAtomic.h"')
@@ -56,11 +58,26 @@ def convert_axis(axis):
         raise TypeError("axis must be a boost_histogram axis")
 
 def _histo_boost(df, name, axes, cols):
+    _hist = hist.Hist(*axes, storage = bh.storage.Weight())
+
+    arr = _hist.view(flow=True).__array_interface__
+
+    addr = arr["data"][0]
+    size = math.prod(arr["shape"])
+
+    addrptr = cppyy.ll.reinterpret_cast["void*"](addr)
+    print(addrptr)
+
     cppaxes = [convert_axis(axis) for axis in axes]
-    res = _histo_boost_raw(df, cppaxes, cols)
+    h = ROOT.narf.make_atomic_histogram_with_error_adopted(addrptr, size, *cppaxes)
+
+    helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
+    coltypes = [df.GetColumnType(col) for col in cols]
+    targs = tuple([type(df), type(helper)] + coltypes)
+    res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
+
     res.name = name
-    res._axes = axes
-    res._hist = None
+    res._hist = _hist
     return res
 
 def _histo_boost_raw(df, axes, cols):
@@ -106,11 +123,11 @@ def _make_hist(result_ptr):
     print("done conversion")
 
 def _get_hist(result_ptr):
-    _make_hist(result_ptr)
+    result_ptr._GetValue()
     return result_ptr._hist
 
 def _hist_getitem(result_ptr, *args, **kwargs):
-    _make_hist(result_ptr)
+    result_ptr._GetValue()
     return result_ptr._hist.__getitem__(*args, **kwargs)
 
 @ROOT.pythonization("RInterface<", ns="ROOT::RDF", is_prefix=True)

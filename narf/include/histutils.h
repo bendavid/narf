@@ -9,6 +9,16 @@
 namespace narf {
   using namespace boost::histogram;
 
+
+  // wrapper class to make boost happy by providing dummy allocator_type
+  template <typename T>
+  class RVecDerived : public ROOT::VecOps::RVec<T> {
+  public:
+    using allocator_type = std::allocator<T>;
+
+    RVecDerived(T *data, std::size_t size) : ROOT::VecOps::RVec<T>(data, size) {}
+  };
+
   template<typename Axis, typename... Axes>
   histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, default_storage>
   make_histogram(Axis&& axis, Axes&&... axes) {
@@ -21,16 +31,10 @@ namespace narf {
     return make_histogram_with(dense_storage<accumulators::count<double, true>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
   }
 
-//   template<typename Axis, typename... Axes>
-//   histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<boost::histogram::accumulators::weighted_sum<double>>>
-//   make_histogram_with_error(Axis&& axis, Axes&&... axes) {
-//     return make_histogram_with(dense_storage<boost::histogram::accumulators::weighted_sum<double>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
-//   }
-
   template<typename Axis, typename... Axes>
-  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<narf::weighted_sum<double, false>>>
+  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<boost::histogram::accumulators::weighted_sum<double>>>
   make_histogram_with_error(Axis&& axis, Axes&&... axes) {
-    return make_histogram_with(dense_storage<narf::weighted_sum<double, false>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
+    return make_histogram_with(dense_storage<boost::histogram::accumulators::weighted_sum<double>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
   }
 
   template<typename Axis, typename... Axes>
@@ -39,63 +43,25 @@ namespace narf {
     return make_histogram_with(dense_storage<narf::weighted_sum<double, true>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
   }
 
+  template<typename... Axes>
+  histogram<std::tuple<std::decay_t<Axes>...>, storage_adaptor<RVecDerived<narf::weighted_sum<double, true>>>>
+  make_atomic_histogram_with_error_adopted(void *rawdata, std::size_t size, Axes&&... axes) {
+    using accummulator_type = narf::weighted_sum<double, true>;
+    using storage_type = RVecDerived<accummulator_type>;
+
+    static_assert(std::is_standard_layout<accummulator_type>::value);
+
+    // allowed if the relevant classes have standard layout
+    accummulator_type *data = reinterpret_cast<accummulator_type*>(rawdata);
+
+    return make_histogram_with(storage_type(data, size), std::forward<Axes>(axes)...);
+  }
+
   template<typename DFType, typename Helper, typename... ColTypes>
   ROOT::RDF::RResultPtr<typename std::decay_t<Helper>::Result_t>
   book_helper(DFType &df, Helper &&helper, const std::vector<std::string> &colnames) {
     return df.template Book<ColTypes...>(std::forward<Helper>(helper), colnames);
   }
-
-  template <typename HIST>
-  void boost_histogram_streamer(TBuffer &buf, void *objPtr) {
-    HIST *myObj = static_cast<HIST*>(objPtr);
-    if (buf.IsReading()) {
-      std::cout << "custom streamer reading" << std::endl;
-//       buf >> myObj->value1;
-//       buf >> myObj->value2;
-    } else {
-      std::cout << "custom streamer writing" << std::endl;
-//       buf << myObj->value1;
-//       buf << myObj->value2;
-    }
-  }
-
-  template <typename HIST>
-  void set_custom_streamer() {
-    TClass *cl = TClass::GetClass<HIST>();
-    cl->SetStreamerFunc(&boost_histogram_streamer<HIST>);
-  }
-
-  template <typename HIST, typename addr_t>
-  void fill_buffer(const HIST &hist, addr_t addrvals, addr_t addrvars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
-    double *vals = reinterpret_cast<double*>(addrvals);
-    double *vars = reinterpret_cast<double*>(addrvars);
-
-    constexpr auto rank = std::tuple_size<typename HIST::axes_type>::value;
-
-    std::array<std::size_t, rank> stridevalsarr;
-    std::array<std::size_t, rank> stridevarsarr;
-    for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-      stridevalsarr[iaxis] = stridevals[iaxis]/sizeof(double);
-      stridevarsarr[iaxis] = stridevars[iaxis]/sizeof(double);
-    }
-
-    constexpr std::size_t flowoffset = 1;
-
-    for (auto&& x : indexed(hist, coverage::all)) {
-      std::size_t offsetval = 0;
-      std::size_t offsetvar = 0;
-      for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-        offsetval += stridevalsarr[iaxis]*(x.index(iaxis) + flowoffset);
-        offsetvar += stridevarsarr[iaxis]*(x.index(iaxis) + flowoffset);
-      }
-      vals[offsetval] = x->value();
-      vars[offsetvar] = x->variance();
-    }
-
-    std::cout << "hist sum: " << algorithm::sum(hist).value() << std::endl;
-  }
-
-//   template void fill_buffer(const decltype(make_atomic_histogram_with_error(axis::regular<>(100, 0., 1.)))&, long integer, const std::vector<int> &);
 
 }
 
