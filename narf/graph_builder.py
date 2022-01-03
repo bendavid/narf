@@ -1,7 +1,7 @@
 import ROOT
 from .lumitools import make_lumihelper, make_jsonhelper
 
-def build_and_run(datasets, build_function, output_file):
+def build_and_run(datasets, build_function):
     results = []
     hweights = []
     evtcounts = []
@@ -67,41 +67,42 @@ def build_and_run(datasets, build_function, output_file):
     print("begin event loop")
     ROOT.ROOT.RDF.RunGraphs(evtcounts)
     print("done event loop")
-    #for evtcount in evtcounts:
-        #evtcount.GetValue()
 
     print(results)
 
-    f = ROOT.TFile.Open(output_file, "RECREATE")
+    resultdict = {}
+
     for dataset, res, hweight, evtcount in zip (datasets, results, hweights, evtcounts):
 
-        if hweight.GetEntries() != evtcount.GetValue():
-            errmsg = f"Number of events for dataset {dataset.name} used to fill weight statistics {hweight.GetEntries()} not consistent with total number of events processed (after lumi filtering if applicable): {evtcount.GetValue()}"
+        if hweight[1].GetValue() != evtcount.GetValue():
+            errmsg = f"Number of events for dataset {dataset.name} used to fill weight statistics {hweight[1].GetValue()} not consistent with total number of events processed (after lumi filtering if applicable): {evtcount.GetValue()}"
             raise ValueError(errmsg)
 
-        folder = f.mkdir(dataset.name)
-        folder.cd()
+        dsetresult = {}
+        dsetresult["dataset"] = dataset
+        dsetresult["weightsum"] = hweight[0].GetValue()
 
-        scaleweight = None
+
         if dataset.name in lumisums:
             hlumi = ROOT.TH1D("lumi", "lumi", 1, 0.5, 1.5)
             lumi = lumisums[dataset.name].GetValue()
-            hlumi.Fill(1.0, lumi)
-            hlumi.Write()
-        hweight.Write()
+            dsetresult["lumi"] = lumi
+
+        output = {}
 
         for r in res:
-            print(type(r.GetValue()))
-            if isinstance(r.GetValue(), ROOT.TObject):
-              r.Write()
+            if isinstance(r.GetValue(), ROOT.TNamed):
+              output[r.GetName()] = r.GetValue()
+            elif hasattr(r, "name"):
+                output[r.name] = r.GetValue()
+                print("sum", r.sum())
+                print("sum with overflow", r.sum(flow=True))
             else:
-              #print("access test", r.rank())
-              #print("access test", r.GetValue()[1,1,1])
-              #print("access test direct", r[1,1,1])
-              print("sum", r.sum())
-              print("sum with overflow", r.sum(flow=True))
+                output[str(hash(r.GetValue()))] = r.GetValue()
 
-              #folder.WriteObject(r.GetValue(), r.name)
+        dsetresult["output"] = output
 
-    f.Close()
+        resultdict[dataset.name] = dsetresult
 
+
+    return resultdict

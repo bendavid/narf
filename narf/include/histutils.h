@@ -16,7 +16,7 @@ namespace narf {
   public:
     using allocator_type = std::allocator<T>;
 
-    RVecDerived(T *data, std::size_t size) : ROOT::VecOps::RVec<T>(data, size) {}
+    RVecDerived(void *data, std::size_t size) : ROOT::VecOps::RVec<T>(reinterpret_cast<T*>(data), size) {}
   };
 
   template<typename Axis, typename... Axes>
@@ -57,11 +57,37 @@ namespace narf {
     return make_histogram_with(storage_type(data, size), std::forward<Axes>(axes)...);
   }
 
+  template<typename WrappedStorage, typename... Axes>
+  histogram<std::tuple<std::decay_t<Axes>...>, storage_adaptor<WrappedStorage>>
+  make_histogram_adopted(WrappedStorage &&storage, Axes&&... axes) {
+    // adopting memory in this way is only safe if the relevant classes have standard layout
+    static_assert(std::is_standard_layout<typename WrappedStorage::value_type>::value);
+    return make_histogram_with(std::forward<WrappedStorage>(storage), std::forward<Axes>(axes)...);
+  }
+
   template<typename DFType, typename Helper, typename... ColTypes>
   ROOT::RDF::RResultPtr<typename std::decay_t<Helper>::Result_t>
   book_helper(DFType &df, Helper &&helper, const std::vector<std::string> &colnames) {
     return df.template Book<ColTypes...>(std::forward<Helper>(helper), colnames);
   }
+
+  template<bool underflow, bool overflow, bool circular, bool growth>
+  auto get_option() {
+
+    using cond_underflow_t = std::conditional_t<underflow, axis::option::underflow_t, axis::option::none_t>;
+    using cond_overflow_t = std::conditional_t<overflow, axis::option::overflow_t, axis::option::none_t>;
+    using cond_circular_t = std::conditional_t<circular, axis::option::circular_t, axis::option::none_t>;
+    using cond_growth_t = std::conditional_t<growth, axis::option::growth_t, axis::option::none_t>;
+
+
+    return cond_underflow_t{} | cond_overflow_t{} | cond_circular_t{} | cond_growth_t{};
+
+  }
+
+  template<typename T>
+  struct size_of {
+    static inline constexpr std::size_t value = sizeof(T);
+  };
 
 }
 

@@ -36,9 +36,9 @@ def allDatasets(istest=False):
                     xsec = 1990.5,
                     )
 
-    #return [data, zmc, wplus, wminus]
+    return [data, zmc, wplus, wminus]
     #return [zmc, wplus, wminus]
-    return [zmc]
+    #return [zmc]
     #return [data]
     #return [wplus, wminus]
 

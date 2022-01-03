@@ -15,6 +15,8 @@ else:
 
 #ROOT.TTreeProcessorMT.SetTasksPerWorkerHint(1)
 
+import pickle
+
 
 
 import narf
@@ -27,20 +29,16 @@ boost_hist_default = ROOT.boost.histogram.use_default
 boost_hist_options_none = ROOT.boost.histogram.axis.option.none_t
 
 # standard regular axes
-#axis_pt = ROOT.boost.histogram.axis.regular[""](29, 26., 55., "pt")
-axis_pt = hist.axis.Regular(29, 26., 55.)
 
-#axis_eta = ROOT.boost.histogram.axis.regular[""](48, -2.4, 2.4, "eta")
-axis_eta = hist.axis.Regular(48, -2.4, 2.4)
+axis_pt = hist.axis.Regular(29, 26., 55., name = "pt")
+axis_eta = hist.axis.Regular(48, -2.4, 2.4, name = "eta")
 
-# categorical axis with no overflow
-#axis_charge = ROOT.boost.histogram.axis.category["int", boost_hist_default, boost_hist_options_none]([-1, 1], "charge");
-#axis_charge = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False)
-axis_charge = hist.axis.Regular(2, -2., 2.)
+# categorical axes in python bindings always have an overflow bin, so use a regular
+# axis for the charge
+axis_charge = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "charge")
 
-# integer axis
-#axis_pdf_idx = ROOT.boost.histogram.axis.integer[""](0, 103, "pdf")
-axis_pdf_idx = hist.axis.Integer(0, 103)
+# integer axis with no overflow
+axis_pdf_idx = hist.axis.Integer(0, 103, underflow=False, overflow=False, name = "pdfidx")
 
 def build_graph(df, dataset):
     results = []
@@ -50,8 +48,7 @@ def build_graph(df, dataset):
     else:
         df = df.Define("weight", "std::copysign(1.0, genWeight)")
 
-    df = df.DefinePerSample("one", "1.")
-    hweight = df.Histo1D(("hweight", "", 1, 0.5, 1.5), "one", "weight")
+    weightsum = df.SumAndCount("weight")
 
     df = df.Define("vetoMuons", "Muon_pt > 10 && Muon_looseId && abs(Muon_eta) < 2.4 && abs(Muon_dxybs) < 0.05")
 
@@ -94,6 +91,11 @@ def build_graph(df, dataset):
                 hptetachargepdf = df.HistoND((f"hptetachargepdf_{i}", "", 4, [29, 48, 2, 103], [26., -2.4, -2., -0.5], [55., 2.4, 2., 102.5]), ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", f"pdfweight_{i}"])
             results.append(hptetachargepdf)
 
-    return results, hweight
+    return results, weightsum
 
-narf.build_and_run(datasets, build_graph, "testout.root")
+resultdict = narf.build_and_run(datasets, build_graph)
+
+fname = "test.pkl"
+
+with open(fname, "wb") as f:
+    pickle.dump(resultdict, f)
