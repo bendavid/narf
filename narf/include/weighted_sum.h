@@ -93,8 +93,8 @@ namespace narf {
     static constexpr bool thread_safe() noexcept { return ThreadSafe; }
 
   private:
-    internal_type sum_of_weights_{};
-    internal_type sum_of_weights_squared_{};
+    internal_type sum_of_weights_{value_type{}};
+    internal_type sum_of_weights_squared_{value_type{}};
   };
 
 } // namespace narf

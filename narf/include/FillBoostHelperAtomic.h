@@ -158,7 +158,10 @@ namespace narf {
       FillBoostHelperAtomic(const FillBoostHelperAtomic &) = delete;
 
       FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))) {
-         static_assert(HIST::storage_type::has_threading_support);
+
+         if (ROOT::IsImplicitMTEnabled() && !HIST::storage_type::has_threading_support) {
+            throw std::runtime_error("multithreading is enabled but histogram is not thread-safe, not currently supported");
+         }
       }
 
       void Initialize() {}

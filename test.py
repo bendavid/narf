@@ -16,7 +16,7 @@ else:
 #ROOT.TTreeProcessorMT.SetTasksPerWorkerHint(1)
 
 import pickle
-
+import gzip
 
 
 import narf
@@ -81,7 +81,7 @@ def build_graph(df, dataset):
         df = df.DefinePerSample("pdfidx", "std::array<int, 103> res; std::iota(res.begin(), res.end(), 0); return res;")
 
 
-        for i in range(1):
+        for i in range(10):
 
             df = df.Define(f"pdfweight_{i}", "weight*LHEPdfWeight")
 
@@ -95,7 +95,7 @@ def build_graph(df, dataset):
 
 resultdict = narf.build_and_run(datasets, build_graph)
 
-fname = "test.pkl"
+fname = "test.pkl.gz"
 
-with open(fname, "wb") as f:
+with gzip.open(fname, "wb") as f:
     pickle.dump(resultdict, f)
