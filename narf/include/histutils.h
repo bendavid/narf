@@ -2,8 +2,8 @@
 #define NARF_HISTUTILS_H
 
 #include <boost/histogram.hpp>
-#include "weighted_sum.h"
 #include "adopted_storage.h"
+#include "atomic_adaptor.h"
 #include <ROOT/RResultPtr.hxx>
 #include <iostream>
 
@@ -34,15 +34,21 @@ namespace narf {
     return make_histogram_with(dense_storage<boost::histogram::accumulators::weighted_sum<double>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
   }
 
-  template<typename Axis, typename... Axes>
-  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<narf::weighted_sum<double, true>>>
-  make_atomic_histogram_with_error(Axis&& axis, Axes&&... axes) {
-    return make_histogram_with(dense_storage<narf::weighted_sum<double, true>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
-  }
+//   template<typename Axis, typename... Axes>
+//   histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<narf::weighted_sum<double, true>>>
+//   make_atomic_histogram_with_error(Axis&& axis, Axes&&... axes) {
+//     return make_histogram_with(dense_storage<narf::weighted_sum<double, true>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
+//   }
 
   template<typename Storage, typename... Axes>
   histogram<std::tuple<std::decay_t<Axes>...>, Storage>
   make_histogram_with_storage(Storage &&storage, Axes&&... axes) {
+    return make_histogram_with(std::forward<Storage>(storage), std::forward<Axes>(axes)...);
+  }
+
+  template<typename Storage, typename... Axes>
+  histogram<std::tuple<std::decay_t<Axes>...>, storage_adaptor<Storage>>
+  make_histogram_with_adaptable(Storage &&storage, Axes&&... axes) {
     return make_histogram_with(std::forward<Storage>(storage), std::forward<Axes>(axes)...);
   }
 

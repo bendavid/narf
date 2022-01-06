@@ -3,6 +3,7 @@
 
 #include <boost/histogram.hpp>
 
+#include "TROOT.h"
 #include "ROOT/RDF/Utils.hxx"
 #include "ROOT/RDF/ActionHelpers.hxx"
 
@@ -213,8 +214,8 @@ namespace narf {
       }
 
       void Finalize() {
-        const double sumval = algorithm::sum(*fObject).value();
-        std::cout << "hist sum in Finalize: " << sumval << std::endl;
+//         const double sumval = algorithm::sum(*fObject).value();
+//         std::cout << "hist sum in Finalize: " << sumval << std::endl;
 //         std::cout << "hist bin content in Finalize" << fObject->at(1, 1, 1).value() << std::endl;
       }
 

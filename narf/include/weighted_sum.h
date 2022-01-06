@@ -20,6 +20,7 @@ namespace narf {
   public:
     using value_type = ValueType;
     using const_reference = const value_type&;
+    using return_type = std::conditional_t<ThreadSafe, value_type, const_reference>;
 
     weighted_sum() = default;
 
@@ -76,13 +77,13 @@ namespace narf {
     bool operator!=(const weighted_sum& rhs) const noexcept { return !operator==(rhs); }
 
     /// Return value of the sum.
-    value_type value() const noexcept { return sum_of_weights_; }
+    return_type value() const noexcept { return sum_of_weights_; }
 
     /// Return estimated variance of the sum.
-    value_type variance() const noexcept { return sum_of_weights_squared_; }
+    return_type variance() const noexcept { return sum_of_weights_squared_; }
 
     // lossy conversion must be explicit
-    explicit operator value_type() const { return sum_of_weights_; }
+    explicit operator return_type() const { return sum_of_weights_; }
 
     template <class Archive>
     void serialize(Archive& ar, unsigned /* version */) {
@@ -93,8 +94,8 @@ namespace narf {
     static constexpr bool thread_safe() noexcept { return ThreadSafe; }
 
   private:
-    internal_type sum_of_weights_{value_type{}};
-    internal_type sum_of_weights_squared_{value_type{}};
+    internal_type sum_of_weights_{value_type()};
+    internal_type sum_of_weights_squared_{value_type()};
   };
 
 } // namespace narf

@@ -6,6 +6,7 @@ import time
 import math
 import numpy as np
 import functools
+#import cppyy.ll
 
 ROOT.gInterpreter.Declare('#include "histutils.h"')
 ROOT.gInterpreter.Declare('#include "FillBoostHelperAtomic.h"')
@@ -61,32 +62,31 @@ def convert_axis(axis):
 def convert_storage_type(storage, force_atomic):
     if isinstance(storage, bh.storage.Double):
         if force_atomic:
-            raise TypeError("atomic storage not supported for storage type Double")
+            return "narf::atomic_adaptor<double>"
         else:
             return "double"
     elif isinstance(storage, bh.storage.Unlimited):
         raise TypeError("Unlimited storage not supported")
     elif isinstance(storage, bh.storage.Int64):
         if force_atomic:
-            return "boost::histogram::accumulators::count<std::int64_t, true>"
+            return "narf::atomic_adaptor<std::int64_t>"
         else:
             return "std::int64_t"
     elif isinstance(storage, bh.storage.AtomicInt64):
         return "boost::histogram::accumulators::count<std::int64_t, true>"
     elif isinstance(storage, bh.storage.Weight):
         if force_atomic:
-            return "narf::weighted_sum<double, true>"
-            #return "narf::weighted_sum<double, false>"
+            return "boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>"
         else:
             return "boost::histogram::accumulators::weighted_sum<double>"
     elif isinstance(storage, bh.storage.Mean):
         if force_atomic:
-            raise TypeError("atomic storage not supported for storage type Mean")
+            return "narf::atomic_adaptor<boost::histogram::accumulators::mean<double>>"
         else:
             return "boost::histogram::accumulators::mean<double>"
     elif isinstance(storage, bh.storage.WeightedMean):
         if force_atomic:
-            raise TypeError("atomic storage not supported for storage type WeightedMean")
+            return "narf::atomic_adaptor<boost::histogram::accumulators::weighted_mean<double>>"
         else:
             return "boost::histogram::accumulators::weighted_mean<double>"
     else:
@@ -96,6 +96,8 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
     # of the python hist histogram
+
+    #storage = bh.storage.Mean()
 
     _hist = hist.Hist(*axes, storage = storage)
 
@@ -125,10 +127,15 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if strides != stridesf:
         raise ValueError("memory is not a contiguous fortran-style array as required by the C++ class")
 
-    cppaxes = [convert_axis(axis) for axis in axes]
+    #cppaxes = [convert_axis(axis) for axis in axes]
+    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
     cppstoragetype = convert_storage_type(storage, force_atomic)
 
     h = ROOT.narf.make_histogram_adopted[cppstoragetype](addr, size_bytes, *cppaxes)
+
+    #bufptr = cppyy.ll.reinterpret_cast["void*"](addr)
+    #storage = ROOT.narf.adopted_storage[cppstoragetype](bufptr, size_bytes)
+    #h = ROOT.narf.make_histogram_with_storage(ROOT.std.move(storage), *cppaxes)
 
     # confirm storage order empirically
     origin = (0,)*len(shape)
