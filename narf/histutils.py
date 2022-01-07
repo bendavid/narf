@@ -181,6 +181,122 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     return res
 
+
+def _convert_root_axis(axis):
+    is_regular = axis.GetXbins().fN == 0
+
+    if is_regular:
+        nbins = axis.GetNbins()
+        xlow = axis.GetXmin()
+        xhigh = axis.GetXmax()
+        return ROOT.boost.histogram.axis.regular[""](nbins, xlow, xhigh)
+    else:
+        edges = [edge for edge in axis.GetXbins()]
+        return ROOT.boost.histogram.axis.variable[""](edges)
+
+def _convert_root_hist(hist):
+    axes = []
+    if isinstance(hist, ROOT.TH3):
+        axes.append(hist.GetXaxis())
+        axes.append(hist.GetYaxis())
+        axes.append(hist.GetZaxis())
+    elif isinstance(hist, ROOT.TH2):
+        axes.append(hist.GetXaxis())
+        axes.append(hist.GetYaxis())
+    elif isinstance(hist, ROOT.TH1):
+        axes.append(hist.GetXaxis())
+    elif isinstance(hist, ROOT.THnBase):
+        for axis in hist.GetListOfAxes():
+            axes.append(axis)
+
+    boost_axes = [_convert_root_axis(axis) for axis in axes]
+    boost_hist = ROOT.narf.make_atomic_histogram_with_error(*boost_axes)
+
+    return boost_hist
+
+def _convert_root_axis_info(nbins, xlow, xhigh, edges):
+
+    if edges:
+        return ROOT.boost.histogram.axis.variable[""](edges)
+    else:
+        return ROOT.boost.histogram.axis.regular[""](nbins, xlow, xhigh)
+
+
+def _convert_root_model(model):
+
+    axes_info = []
+
+    if isinstance(model, ROOT.ROOT.RDF.TH1DModel):
+        hist_type = ROOT.TH1D
+        axes_info.append((model.fNbinsX, model.fXLow, model.fXUp, model.fBinXEdges))
+    elif isinstance(model, ROOT.ROOT.RDF.TH2DModel):
+        hist_type = ROOT.TH2D
+        axes_info.append((model.fNbinsX, model.fXLow, model.fXUp, model.fBinXEdges))
+        axes_info.append((model.fNbinsY, model.fYLow, model.fYUp, model.fBinYEdges))
+    elif isinstance(model, ROOT.ROOT.RDF.TH3DModel):
+        hist_type = ROOT.TH3D
+        axes_info.append((model.fNbinsX, model.fXLow, model.fXUp, model.fBinXEdges))
+        axes_info.append((model.fNbinsY, model.fYLow, model.fYUp, model.fBinYEdges))
+        axes_info.append((model.fNbinsZ, model.fZLow, model.fZUp, model.fBinZEdges))
+    elif isinstance(model, ROOT.ROOT.RDF.THnDModel):
+        hist_type = ROOT.THnT["double"]
+        for nbins, xlow, xhigh, edges in zip(model.fNbins, model.fXmin, model.fXmax, model.fBinEdges):
+            axes_info.append((nbins, xlow, xhigh, edges))
+
+    boost_axes = [_convert_root_axis_info(*axis_info) for axis_info in axes_info]
+    boost_hist = ROOT.narf.make_atomic_histogram_with_error(*boost_axes)
+
+    return hist_type, boost_hist
+
+
+
+def _histo_with_boost(df, model, cols):
+
+    hist_type, boost_hist = _convert_root_model(model)
+    helper = ROOT.narf.FillBoostHelperAtomic[hist_type, type(boost_hist)](model, ROOT.std.move(boost_hist))
+
+    coltypes = [df.GetColumnType(col) for col in cols]
+    targs = tuple([type(df), type(helper)] + coltypes)
+    res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
+
+    return res
+
+def _histo1d_with_boost(df, model, v, w = None):
+    if isinstance(model, tuple) or isinstance(model, list):
+        model = ROOT.RDF.TH1DModel(*model)
+
+    cols = [v]
+    if w is not None:
+        cols.append(w)
+
+    return _histo_with_boost(df, model, cols)
+
+def _histo2d_with_boost(df, model, v0, v1,  w = None):
+    if isinstance(model, tuple) or isinstance(model, list):
+        model = ROOT.RDF.TH2DModel(*model)
+
+    cols = [v0, v1]
+    if w is not None:
+        cols.append(w)
+
+    return _histo_with_boost(df, model, cols)
+
+def _histo3d_with_boost(df, model, v0, v1, v2, w = None):
+    if isinstance(model, tuple) or isinstance(model, list):
+        model = ROOT.RDF.TH3DModel(*model)
+
+    cols = [v0, v1, v2]
+    if w is not None:
+        cols.append(w)
+
+    return _histo_with_boost(df, model, cols)
+
+def _histond_with_boost(df, model, cols):
+    if isinstance(model, tuple) or isinstance(model, list):
+        model = ROOT.RDF.THnDModel(*model)
+
+    return _histo_with_boost(df, model, cols)
+
 def _sum_and_count(df, col):
     sumres = df.Sum(col)
     countres = df.Count()
@@ -190,4 +306,8 @@ def _sum_and_count(df, col):
 def pythonize_rdataframe(klass):
     # add function for boost histograms
     klass.HistoBoost = _histo_boost
+    klass.Histo1DWithBoost = _histo1d_with_boost
+    klass.Histo2DWithBoost = _histo2d_with_boost
+    klass.Histo3DWithBoost = _histo3d_with_boost
+    klass.HistoNDWithBoost = _histond_with_boost
     klass.SumAndCount = _sum_and_count

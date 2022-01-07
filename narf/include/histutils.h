@@ -34,11 +34,11 @@ namespace narf {
     return make_histogram_with(dense_storage<boost::histogram::accumulators::weighted_sum<double>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
   }
 
-//   template<typename Axis, typename... Axes>
-//   histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<narf::weighted_sum<double, true>>>
-//   make_atomic_histogram_with_error(Axis&& axis, Axes&&... axes) {
-//     return make_histogram_with(dense_storage<narf::weighted_sum<double, true>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
-//   }
+  template<typename Axis, typename... Axes>
+  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>>>
+  make_atomic_histogram_with_error(Axis&& axis, Axes&&... axes) {
+    return make_histogram_with(dense_storage<boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
+  }
 
   template<typename Storage, typename... Axes>
   histogram<std::tuple<std::decay_t<Axes>...>, Storage>

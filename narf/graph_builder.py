@@ -93,6 +93,10 @@ def build_and_run(datasets, build_function):
         for r in res:
             if isinstance(r.GetValue(), ROOT.TNamed):
               output[r.GetName()] = r.GetValue()
+              #if isinstance(r.GetValue(), ROOT.THnBase):
+                  #print(r.GetSumw())
+                  #print(r.GetSumw2())
+
             elif hasattr(r, "name"):
                 output[r.name] = r.GetValue()
                 print("sum", r.sum())

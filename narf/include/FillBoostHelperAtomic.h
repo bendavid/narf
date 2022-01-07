@@ -21,9 +21,10 @@ namespace narf {
    template <typename... Axes>
    struct is_static<std::tuple<Axes...>> : std::true_type {};
 
-   template <typename HIST>
-   class FillBoostHelperAtomic : public ROOT::Detail::RDF::RActionImpl<FillBoostHelperAtomic<HIST>> {
+   template <typename HIST, typename HISTFILL = HIST>
+   class FillBoostHelperAtomic : public ROOT::Detail::RDF::RActionImpl<FillBoostHelperAtomic<HIST, HISTFILL>> {
       std::shared_ptr<HIST> fObject;
+      std::shared_ptr<HISTFILL> fFillObject;
 
       // class which wraps a pointer and implements a no-op increment operator
       template <typename T>
@@ -75,7 +76,7 @@ namespace narf {
       template <typename A, typename T, T... Idxs>
       void FillHist(const A &tup, std::integer_sequence<T, Idxs...>) {
          using namespace boost::histogram;
-         auto &thisSlotH = *fObject;
+         auto &thisSlotH = *fFillObject;
 
          constexpr auto N = std::tuple_size<A>::value;
 
@@ -83,8 +84,8 @@ namespace narf {
 
          // handle filling both with and without weight, with compile time
          // checking where possible
-         if constexpr (is_static<typename HIST::axes_type>::value) {
-            constexpr auto rank = std::tuple_size<typename HIST::axes_type>::value;
+         if constexpr (is_static<typename HISTFILL::axes_type>::value) {
+            constexpr auto rank = std::tuple_size<typename HISTFILL::axes_type>::value;
             constexpr bool weighted = N != rank;
             if constexpr (weighted) {
                thisSlotH(std::get<Idxs>(tup)..., weight(std::get<N-1>(tup)));
@@ -94,7 +95,7 @@ namespace narf {
             }
          }
          else {
-            const auto rank = fObject->rank();
+            const auto rank = fFillObject->rank();
             const bool weighted = N != rank;
             if (weighted) {
                thisSlotH(std::get<Idxs>(tup)..., weight(std::get<N-1>(tup)));
@@ -111,7 +112,7 @@ namespace narf {
       template <typename A, typename T, T... Idxs>
       void FillHistIt(const A &tup, std::integer_sequence<T, Idxs...>) {
          using namespace boost::histogram;
-         auto &thisSlotH = *fObject;
+         auto &thisSlotH = *fFillObject;
 
          constexpr auto N = std::tuple_size<A>::value;
 
@@ -119,8 +120,8 @@ namespace narf {
 
          // handle filling both with and without weight, with compile time
          // checking where possible
-         if constexpr (is_static<typename HIST::axes_type>::value) {
-            constexpr auto rank = std::tuple_size<typename HIST::axes_type>::value;
+         if constexpr (is_static<typename HISTFILL::axes_type>::value) {
+            constexpr auto rank = std::tuple_size<typename HISTFILL::axes_type>::value;
             constexpr bool weighted = N != rank;
             if constexpr (weighted) {
                thisSlotH(*std::get<Idxs>(tup)..., weight(*std::get<N-1>(tup)));
@@ -130,7 +131,7 @@ namespace narf {
             }
          }
          else {
-            const auto rank = fObject->rank();
+            const auto rank = fFillObject->rank();
             const bool weighted = N != rank;
             if (weighted) {
                thisSlotH(*std::get<Idxs>(tup)..., weight(*std::get<N-1>(tup)));
@@ -158,9 +159,30 @@ namespace narf {
       FillBoostHelperAtomic(FillBoostHelperAtomic &&) = default;
       FillBoostHelperAtomic(const FillBoostHelperAtomic &) = delete;
 
-      FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))) {
+      FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))), fFillObject(fObject) {
 
-         if (ROOT::IsImplicitMTEnabled() && !HIST::storage_type::has_threading_support) {
+         if (ROOT::IsImplicitMTEnabled() && !HISTFILL::storage_type::has_threading_support) {
+            throw std::runtime_error("multithreading is enabled but histogram is not thread-safe, not currently supported");
+         }
+      }
+
+      FillBoostHelperAtomic(HIST &&h, HISTFILL &&hfill) : fObject(std::make_shared<HIST>(std::move(h))),
+      fFillObject(std::make_shared<HISTFILL>(std::move(hfill))) {
+
+         if (ROOT::IsImplicitMTEnabled() && !HISTFILL::storage_type::has_threading_support) {
+            throw std::runtime_error("multithreading is enabled but histogram is not thread-safe, not currently supported");
+         }
+      }
+
+      template <typename M>
+      FillBoostHelperAtomic(const M &model, HISTFILL &&hfill) : fObject(model.GetHistogram()),
+      fFillObject(std::make_shared<HISTFILL>(std::move(hfill))) {
+
+         if constexpr (std::is_base_of_v<TH1, HIST>) {
+            fObject->SetDirectory(nullptr);
+         }
+
+         if (ROOT::IsImplicitMTEnabled() && !HISTFILL::storage_type::has_threading_support) {
             throw std::runtime_error("multithreading is enabled but histogram is not thread-safe, not currently supported");
          }
       }
@@ -214,9 +236,41 @@ namespace narf {
       }
 
       void Finalize() {
-//         const double sumval = algorithm::sum(*fObject).value();
-//         std::cout << "hist sum in Finalize: " << sumval << std::endl;
-//         std::cout << "hist bin content in Finalize" << fObject->at(1, 1, 1).value() << std::endl;
+
+         constexpr bool isTH1 = std::is_base_of<TH1, HIST>::value;
+         constexpr bool isTHn = std::is_base_of<THnBase, HIST>::value;
+
+         if constexpr (isTH1 || isTHn) {
+
+            fObject->Sumw2();
+
+            const auto rank = fFillObject->rank();
+
+            std::vector<int> idxs(rank, 0);
+            for (auto&& x: indexed(*fFillObject, coverage::all)) {
+
+               for (unsigned int idim = 0; idim < rank; ++idim) {
+                  // convert from boost to root numbering convention
+                  idxs[idim] = x.index(idim) + 1;
+               }
+
+               if constexpr (isTH1) {
+                  const int i = idxs[0];
+                  const int j = idxs.size() > 1 ? idxs[1] : 0;
+                  const int k = idxs.size() > 2 ? idxs[2] : 0;
+                  const auto bin = fObject->GetBin(i, j, k);
+                  fObject->SetBinContent(bin, x->value());
+                  fObject->SetBinError(bin, std::sqrt(x->variance()));
+               }
+               else if constexpr (isTHn) {
+                  const auto bin = fObject->GetBin(idxs.data());
+                  fObject->SetBinContent(bin, x->value());
+                  fObject->SetBinError2(bin, x->variance());
+               }
+            }
+         }
+
+         fFillObject.reset();
       }
 
       std::shared_ptr<HIST> GetResultPtr() const {
