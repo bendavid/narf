@@ -148,7 +148,7 @@ namespace narf {
          // loop increments all of the iterators while leaving scalars unmodified
          // TODO this could be simplified with fold expressions or std::apply in C++17
          auto nop = [](auto &&...) {};
-         for (auto itst = std::make_tuple(its...); GetNthElement<ColIdx>(its...) != end; nop(++its...)) {
+         for (auto itst = std::forward_as_tuple(its...); GetNthElement<ColIdx>(its...) != end; nop(++its...)) {
             FillHistIt(itst, std::make_index_sequence<sizeof...(its)-1>{});
          }
       }
