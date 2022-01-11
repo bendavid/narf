@@ -353,6 +353,7 @@ def hist_to_root(boost_hist):
         varsstrides = []
     else:
         varsstrides = variances.__array_interface__["strides"]
+        root_hist.Sumw2()
 
     ROOT.narf.fill_root(root_hist, valsaddr, varsaddr, valsstrides, varsstrides)
 
