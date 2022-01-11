@@ -6,6 +6,7 @@ import time
 import math
 import numpy as np
 import functools
+import uuid
 #import cppyy.ll
 
 ROOT.gInterpreter.Declare('#include "histutils.h"')
@@ -214,6 +215,124 @@ def _convert_root_hist(hist):
     boost_hist = ROOT.narf.make_atomic_histogram_with_error(*boost_axes)
 
     return boost_hist
+
+def _convert_root_axis_to_hist(axis):
+    is_regular = axis.GetXbins().fN == 0
+
+    if is_regular:
+        nbins = axis.GetNbins()
+        xlow = axis.GetXmin()
+        xhigh = axis.GetXmax()
+        return hist.axis.Regular(nbins, xlow, xhigh)
+    else:
+        edges = [edge for edge in axis.GetXbins()]
+        return hist.axis.Variable(edges)
+
+def root_to_hist(root_hist):
+    axes = []
+    if isinstance(root_hist, ROOT.TH3):
+        axes.append(root_hist.GetXaxis())
+        axes.append(root_hist.GetYaxis())
+        axes.append(root_hist.GetZaxis())
+    elif isinstance(root_hist, ROOT.TH2):
+        axes.append(root_hist.GetXaxis())
+        axes.append(root_hist.GetYaxis())
+    elif isinstance(root_hist, ROOT.TH1):
+        axes.append(root_hist.GetXaxis())
+    elif isinstance(root_hist, ROOT.THnBase):
+        for axis in root_hist.GetListOfAxes():
+            axes.append(axis)
+
+    boost_axes = [_convert_root_axis_to_hist(axis) for axis in axes]
+    boost_hist = hist.Hist(*boost_axes, storage = bh.storage.Weight())
+
+    vals = boost_hist.values(flow = True)
+    valsaddr = vals.__array_interface__["data"][0]
+    valsstrides = vals.__array_interface__["strides"]
+
+    variances = boost_hist.variances(flow = True)
+    varsaddr = variances.__array_interface__["data"][0]
+    if varsaddr == valsaddr:
+        varsaddr = 0
+        varsstrides = []
+    else:
+        varsstrides = variances.__array_interface__["strides"]
+
+    ROOT.narf.fill_boost(root_hist, valsaddr, varsaddr, valsstrides, varsstrides)
+
+    return boost_hist
+
+
+def hist_to_root(boost_hist):
+    is_variable = False
+    for axis in boost_hist.axes:
+        if isinstance(axis, bh.axis.Variable) or (isinstance(axis, bh.axis.Regular) and axis.transform is not None):
+            is_variable = True
+
+    name = str(uuid.uuid1())
+
+
+    if is_variable:
+        raise TypeError("not currently supported")
+    else:
+        nbins = []
+        xlows = []
+        xhighs = []
+        for axis in boost_hist.axes:
+            if isinstance(axis, bh.axis.Regular):
+                #TODO add transform support
+                if axis.transform is not None:
+                    raise ValueError("transforms are not supported (should never reach here)")
+
+                nbins.append(axis.size)
+                xlows.append(axis.edges[0])
+                xhighs.append(axis.edges[-1])
+            elif isinstance(axis, bh.axis.Integer):
+                ilow = axis.bin(0)
+                ihigh = axis.bin(axis.size - 1) + 1
+
+                nbins.append(axis.size)
+                xlows.append(float(ilow) - 0.5)
+                xhighs.append(float(ihigh) - 0.5)
+            elif isinstance(axis, bh.axis.Boolean):
+                nbins.append(2)
+                xlows.append(-0.5)
+                xhighs.append(1.5)
+            else:
+                raise TypeError("invalid axis type")
+
+        if len(boost_hist.axes) == 1:
+            root_hist = ROOT.TH1D(name, "", nbins[0], xlows[0], xhighs[0])
+        elif len(boost_hist.axes) == 2:
+            root_hist = ROOT.TH2D(name, "", nbins[0], xlows[0], xhighs[0],
+                                                        nbins[1], xlows[1], xhighs[1])
+        elif len(boost_hist.axes) == 3:
+            root_hist = ROOT.TH3D(name, "", nbins[0], xlows[0], xhighs[0],
+                                                        nbins[1], xlows[1], xhighs[1],
+                                                        nbins[2], xlows[2], xhighs[2])
+        else:
+            nbins = array.array("i", nbins)
+            xlows = array.array("d", xlows)
+            xhighs = array.array("d", xhighs)
+            root_hist = ROOT.THnT["double"](name, "", len(boost_hist.axes), nbins, xlows, xhighs)
+
+
+    vals = boost_hist.values(flow = True)
+    valsaddr = vals.__array_interface__["data"][0]
+    valsstrides = vals.__array_interface__["strides"]
+
+    variances = boost_hist.variances(flow = True)
+    varsaddr = variances.__array_interface__["data"][0]
+    if varsaddr == valsaddr:
+        varsaddr = 0
+        varsstrides = []
+    else:
+        varsstrides = variances.__array_interface__["strides"]
+
+    ROOT.narf.fill_root(root_hist, valsaddr, varsaddr, valsstrides, varsstrides)
+
+    return root_hist
+
 
 def _convert_root_axis_info(nbins, xlow, xhigh, edges):
 

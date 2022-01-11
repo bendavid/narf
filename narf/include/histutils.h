@@ -85,6 +85,115 @@ namespace narf {
 
   }
 
+  double get_bin_error2(const TH1& hist, int ibin) {
+    const double err = hist.GetBinError(ibin);
+    return err*err;
+  }
+
+  double get_bin_error2(const THnBase& hist, Long64_t ibin) {
+    return hist.GetBinError2(ibin);
+  }
+
+  void fill_idxs(const TH1& hist, int ibin, std::vector<int> &idxs) {
+    hist.GetBinXYZ(ibin, idxs[0], idxs[1], idxs[2]);
+  }
+
+  void fill_idxs(const THnBase& hist, Long64_t ibin, std::vector<int> &idxs) {
+    hist.GetBinContent(ibin, idxs.data());
+  }
+
+  int get_n_bins(const TH1& hist) {
+    return hist.GetNcells();
+  }
+
+  Long64_t get_n_bins(const THnBase& hist) {
+    return hist.GetNbins();
+  }
+
+  void set_bin_error2(TH1& hist, int ibin, double var) {
+    hist.SetBinError(ibin, std::sqrt(var));
+  }
+
+  void set_bin_error2(THnBase& hist, Long64_t ibin, double var) {
+    hist.SetBinError2(ibin, var);
+  }
+
+  template <typename HIST, typename addr_t>
+  void fill_boost(const HIST &hist, addr_t addrvals, addr_t addrvars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
+    double *vals = reinterpret_cast<double*>(addrvals);
+    double *vars = reinterpret_cast<double*>(addrvars);
+
+    const auto rank = stridevals.size();
+
+    std::vector<std::size_t> stridevalsarr(rank);
+    std::vector<std::size_t> stridevarsarr(rank);
+    for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
+      stridevalsarr[iaxis] = stridevals[iaxis]/sizeof(double);
+      if (vars != nullptr) {
+        stridevarsarr[iaxis] = stridevars[iaxis]/sizeof(double);
+      }
+    }
+
+    // has to be at least 3 for TH1 case
+    std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
+    const auto nbins = get_n_bins(hist);
+    for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
+      fill_idxs(hist, ibin, idxs);
+
+      std::size_t offsetval = 0;
+      std::size_t offsetvar = 0;
+      for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
+        offsetval += stridevalsarr[iaxis]*idxs[iaxis];
+        if (vars != nullptr) {
+          offsetvar += stridevarsarr[iaxis]*idxs[iaxis];
+        }
+      }
+
+      vals[offsetval] = hist.GetBinContent(ibin);
+      if (vars != nullptr) {
+        vars[offsetvar] = get_bin_error2(hist, ibin);
+      }
+    }
+  }
+
+  template <typename HIST, typename addr_t>
+  void fill_root(HIST &hist, addr_t addrvals, addr_t addrvars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
+    double *vals = reinterpret_cast<double*>(addrvals);
+    double *vars = reinterpret_cast<double*>(addrvars);
+
+    const auto rank = stridevals.size();
+
+    std::vector<std::size_t> stridevalsarr(rank);
+    std::vector<std::size_t> stridevarsarr(rank);
+    for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
+      stridevalsarr[iaxis] = stridevals[iaxis]/sizeof(double);
+      if (vars != nullptr) {
+        stridevarsarr[iaxis] = stridevars[iaxis]/sizeof(double);
+      }
+    }
+
+    // has to be at least 3 for TH1 case
+    std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
+    const auto nbins = get_n_bins(hist);
+    for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
+      fill_idxs(hist, ibin, idxs);
+
+      std::size_t offsetval = 0;
+      std::size_t offsetvar = 0;
+      for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
+        offsetval += stridevalsarr[iaxis]*idxs[iaxis];
+        if (vars != nullptr) {
+          offsetvar += stridevarsarr[iaxis]*idxs[iaxis];
+        }
+      }
+
+      hist.SetBinContent(ibin, vals[offsetval]);
+      if (vars != nullptr) {
+        set_bin_error2(hist, ibin, vars[offsetvar]);
+      }
+    }
+  }
+
 }
 
 
