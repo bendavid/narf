@@ -7,6 +7,7 @@ import math
 import numpy as np
 import functools
 import uuid
+import array
 #import cppyy.ll
 
 ROOT.gInterpreter.Declare('#include "histutils.h"')
@@ -273,7 +274,31 @@ def hist_to_root(boost_hist):
 
 
     if is_variable:
-        raise TypeError("not currently supported")
+        nbins = []
+        edges = []
+        for axis in boost_hist.axes:
+            if isinstance(axis, bh.axis.Regular) or isinstance(axis, bh.axis.Variable):
+                #TODO add transform support
+                nbins.append(axis.size)
+                edges.append(axis.edges)
+            elif isinstance(axis, bh.axis.Integer):
+                nbins.append(axis.size)
+                edges.append(np.array(axis.edges, dtype=np.float64) - 0.5)
+            elif isinstance(axis, bh.axis.Boolean):
+                nbins.append(2)
+                edges.append([-0.5, 0.5, 1.5])
+            else:
+                raise TypeError("invalid axis type")
+
+        if len(boost_hist.axes) == 1:
+            root_hist = ROOT.TH1D(name, "", nbins[0], edges[0])
+        elif len(boost_hist.axes) == 2:
+            root_hist = ROOT.TH2D(name, "", nbins[0], edges[0], nbins[1], edges[1])
+        elif len(boost_hist.axes) == 3:
+            root_hist = ROOT.TH3D(name, "", nbins[0], edges[0], nbins[1], edges[1], nbins[2], edges[2])
+        else:
+            nbins = array.array("i", nbins)
+            root_hist = ROOT.THnT["double"](name, "", len(boost_hist.axes), nbins, edges)
     else:
         nbins = []
         xlows = []
