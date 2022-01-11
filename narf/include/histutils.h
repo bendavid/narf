@@ -118,10 +118,10 @@ namespace narf {
     hist.SetBinError2(ibin, var);
   }
 
-  template <typename HIST, typename addr_t>
-  void fill_boost(const HIST &hist, addr_t addrvals, addr_t addrvars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
-    double *vals = reinterpret_cast<double*>(addrvals);
-    double *vars = reinterpret_cast<double*>(addrvars);
+  template <typename HIST>
+  void fill_boost(const HIST &hist, double* vals, double *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
+//     double *vals = reinterpret_cast<double*>(addrvals);
+//     double *vars = reinterpret_cast<double*>(addrvars);
 
     const auto rank = stridevals.size();
 
@@ -156,10 +156,10 @@ namespace narf {
     }
   }
 
-  template <typename HIST, typename addr_t>
-  void fill_root(HIST &hist, addr_t addrvals, addr_t addrvars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
-    double *vals = reinterpret_cast<double*>(addrvals);
-    double *vars = reinterpret_cast<double*>(addrvars);
+  template <typename HIST>
+  void fill_root(HIST &hist, double* vals, double *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
+//     double *vals = reinterpret_cast<double*>(addrvals);
+//     double *vars = reinterpret_cast<double*>(addrvars);
 
     const auto rank = stridevals.size();
 

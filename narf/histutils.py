@@ -8,7 +8,7 @@ import numpy as np
 import functools
 import uuid
 import array
-#import cppyy.ll
+import cppyy.ll
 
 ROOT.gInterpreter.Declare('#include "histutils.h"')
 ROOT.gInterpreter.Declare('#include "FillBoostHelperAtomic.h"')
@@ -249,17 +249,20 @@ def root_to_hist(root_hist):
 
     vals = boost_hist.values(flow = True)
     valsaddr = vals.__array_interface__["data"][0]
+    valsarr = cppyy.ll.reinterpret_cast["double*"](valsaddr)
     valsstrides = vals.__array_interface__["strides"]
 
     variances = boost_hist.variances(flow = True)
     varsaddr = variances.__array_interface__["data"][0]
     if varsaddr == valsaddr:
-        varsaddr = 0
-        varsstrides = []
+        varsarr = cppyy.nullptr
+        varsstrides = valsstrides
     else:
+        varsarr = cppyy.ll.reinterpret_cast["double*"](varsaddr)
         varsstrides = variances.__array_interface__["strides"]
+        root_hist.Sumw2()
 
-    ROOT.narf.fill_boost(root_hist, valsaddr, varsaddr, valsstrides, varsstrides)
+    ROOT.narf.fill_boost(root_hist, valsarr, varsarr, valsstrides, varsstrides)
 
     return boost_hist
 
@@ -344,18 +347,20 @@ def hist_to_root(boost_hist):
 
     vals = boost_hist.values(flow = True)
     valsaddr = vals.__array_interface__["data"][0]
+    valsarr = cppyy.ll.reinterpret_cast["double*"](valsaddr)
     valsstrides = vals.__array_interface__["strides"]
 
     variances = boost_hist.variances(flow = True)
     varsaddr = variances.__array_interface__["data"][0]
     if varsaddr == valsaddr:
-        varsaddr = 0
-        varsstrides = []
+        varsarr = cppyy.nullptr
+        varsstrides = valsstrides
     else:
+        varsarr = cppyy.ll.reinterpret_cast["double*"](varsaddr)
         varsstrides = variances.__array_interface__["strides"]
         root_hist.Sumw2()
 
-    ROOT.narf.fill_root(root_hist, valsaddr, varsaddr, valsstrides, varsstrides)
+    ROOT.narf.fill_root(root_hist, valsarr, varsarr, valsstrides, varsstrides)
 
     return root_hist
 
