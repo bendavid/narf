@@ -82,8 +82,8 @@ public:
   // only enable if call operator is available for T with corresponding argument types
   template <typename...Us, typename E = void_t<decltype(std::declval<T&>()(std::forward<Us>(std::declval<Us>())...))>>
   void operator() (Us&&... xs) noexcept {
-    auto modifier = [](T &t, auto&&... xs) {
-      t(std::forward<Us>(xs)...);
+    auto modifier = [](T &t, auto&&... us) {
+      t(std::forward<Us>(us)...);
     };
     this->modify(modifier, std::forward<Us>(xs)...);
   }
