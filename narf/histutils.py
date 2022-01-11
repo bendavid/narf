@@ -138,16 +138,17 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     #h = ROOT.narf.make_histogram_with_storage(ROOT.std.move(storage), *cppaxes)
 
     # confirm storage order empirically
-    origin = (0,)*len(shape)
-    origin_addr = ROOT.addressof(h.at(*origin))
+    if len(shape) > 1:
+        origin = (0,)*len(shape)
+        origin_addr = ROOT.addressof(h.at(*origin))
 
-    for iaxis, stride in enumerate(strides):
-        coords = [0,]*len(shape)
-        coords[iaxis] = 1
-        addr = ROOT.addressof(h.at(*coords))
-        addr_diff = addr - origin_addr
-        if addr_diff != stride:
-            raise ValueError("mismatched storage ordering")
+        for iaxis, stride in enumerate(strides):
+            coords = [0,]*len(shape)
+            coords[iaxis] = 1
+            addr = ROOT.addressof(h.at(*coords))
+            addr_diff = addr - origin_addr
+            if addr_diff != stride:
+                raise ValueError("mismatched storage ordering")
 
     helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
     coltypes = [df.GetColumnType(col) for col in cols]
