@@ -22,6 +22,7 @@ import gzip
 import narf
 from datasets import datasets2016
 import hist
+import lz4.frame
 
 datasets = datasets2016.allDatasets()
 
@@ -66,6 +67,7 @@ def build_graph(df, dataset):
     if args.useBoost:
         #hptetacharge = df.HistoBoost("hptetacharge", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight"])
         hptetacharge = df.HistoBoost("hptetacharge", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight"])
+        #hptetacharge = df.HistoBoost("hptetacharge", [axis_pt], ["goodMuons_Pt0", "weight"])
     else:
         #hptetacharge = df.Histo3D(("hptetacharge", "", 29, 26., 55., 48, -2.4, 2.4, 2, -2., 2.), "goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight")
         hptetacharge = df.Histo3DWithBoost(("hptetacharge", "", 29, 26., 55., 48, -2.4, 2.4, 2, -2., 2.), "goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "weight")
@@ -99,8 +101,9 @@ def build_graph(df, dataset):
 
 resultdict = narf.build_and_run(datasets, build_graph)
 
-fname = "test.pkl.gz"
+fname = "test.pkl.lz4"
 
 print("writing output")
-with gzip.open(fname, "wb") as f:
+#with gzip.open(fname, "wb") as f:
+with lz4.frame.open(fname, "wb") as f:
     pickle.dump(resultdict, f)
