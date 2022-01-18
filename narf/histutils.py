@@ -98,7 +98,7 @@ def convert_storage_type(storage, force_atomic = False):
     else:
         raise TypeError("storage must be a boost_histogram or compatible storage type")
 
-def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled()):
+def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled(), var_axis_names = None):
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
     # of the python hist histogram
@@ -116,11 +116,13 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if has_weight:
         traits = ROOT.narf.tensor_traits[coltypes[-1]]
         if traits.is_tensor:
+            if var_axis_names is None:
+                var_axis_names = [f"var_axis_{i}" for i in range(traits.rank)]
             # weight is a tensor-type, use optimized storage and create additional axes
             # corresponding to tensor indices
-            for size in traits.get_sizes():
+            for size, name in zip(traits.get_sizes(), var_axis_names):
                 tensor_weight = True
-                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False))
+                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = name))
 
 
     _hist = hist.Hist(*python_axes, storage = storage)
