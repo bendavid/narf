@@ -2,34 +2,9 @@
 #ifndef NARF_TENSORUTILS_H
 #define NARF_TENSORUTILS_H
 
-#include <eigen3/Eigen/Dense>
-#include <eigen3/unsupported/Eigen/CXX11/Tensor>
+#include "traits.h"
 
 namespace narf {
-
-template <typename T, typename Enable = void>
-struct tensor_traits {
-  static constexpr bool is_container = false;
-  static constexpr bool is_tensor = false;
-};
-
-template <typename T, int Options_, typename IndexType, std::ptrdiff_t... Indices>
-struct tensor_traits<Eigen::TensorFixedSize<T, Eigen::Sizes<Indices...>, Options_, IndexType>> {
-  static constexpr bool is_container = false;
-  static constexpr bool is_tensor = true;
-  static constexpr std::size_t rank = sizeof...(Indices);
-  static constexpr ptrdiff_t size = (Indices*...*static_cast<ptrdiff_t>(1));
-  static constexpr std::array<std::ptrdiff_t, sizeof...(Indices)> sizes = { Indices... };
-  using value_type = T;
-
-  // needed for PyROOT/cppyy since it can't currently handle the static constexpr member directly
-  static constexpr std::array<std::ptrdiff_t, sizeof...(Indices)> get_sizes() { return sizes; }
-};
-
-template <typename T>
-struct tensor_traits<T, std::enable_if_t<ROOT::Internal::RDF::IsDataContainer<T>::value>> : public tensor_traits<typename T::value_type> {
-  static constexpr bool is_container = true;
-};
 
 template <typename T>
 class TensorAccumulator {
@@ -61,11 +36,46 @@ public:
   // lhs = lhs + rhs
   template <typename U>
   TensorAccumulator &operator+=(const U &rhs) {
+    // make sure rhs has the same shape and storage order, otherwise the linear element-wise
+    // operation doesn't make sense
+    static_assert(std::is_same_v<typename U::Dimensions, typename T::Dimensions> && U::Options == T::Options);
     const typename U::Scalar *itr = rhs.data();
     for (typename T::Scalar *it = tensor_.data(); it != tensor_.data() + size(); ++it, ++itr) {
       (*it) += *itr;
     }
     return *this;
+  }
+
+  // don't use T::operator*= because this is not safe for use with atomics
+  TensorAccumulator &operator*= (const TensorAccumulator &rhs) {
+    const typename T::Scalar *itr = rhs.tensor_.data();
+    for (typename T::Scalar *it = tensor_.data(); it != tensor_.data() + size(); ++it, ++itr) {
+      (*it) *= *itr;
+    }
+  }
+
+  // don't use T::operator/= because this is not safe for use with atomics
+  TensorAccumulator &operator/= (const TensorAccumulator &rhs) {
+    const typename T::Scalar *itr = rhs.tensor_.data();
+    for (typename T::Scalar *it = tensor_.data(); it != tensor_.data() + size(); ++it, ++itr) {
+      (*it) /= *itr;
+    }
+  }
+
+  // multiplication with scalar
+  template <typename U>
+  TensorAccumulator &operator*= (const U &rhs) {
+    for (typename T::Scalar *it = tensor_.data(); it != tensor_.data() + size(); ++it) {
+      (*it) *= rhs;
+    }
+  }
+
+  // division with scalar
+  template <typename U>
+  TensorAccumulator &operator/= (const U &rhs) {
+    for (typename T::Scalar *it = tensor_.data(); it != tensor_.data() + size(); ++it) {
+      (*it) /= rhs;
+    }
   }
 
   template <typename... Us>
@@ -81,6 +91,7 @@ private:
 template <typename T>
 struct tensor_traits<TensorAccumulator<T>> : public tensor_traits<T> {
 };
+
 
 }
 

@@ -248,20 +248,31 @@ namespace narf {
       }
 
       void Finalize() {
-         using trait = narf::tensor_traits<std::decay_t<decltype(fFillObject->begin()->value())>>;
+         // this should work but doesn't because boost::histogram::storage_adapter doesn't
+         // pass it through properly, so use decltype below instead
+//          using acc_t = typename HISTFILL::Storage::value_type;
+         using acc_t = std::decay_t<decltype(*fFillObject->begin())>;
+         using acc_trait = narf::acc_traits<acc_t>;
 
+         constexpr bool is_weighted_sum = acc_trait::is_weighted_sum;
+
+         using tensor_trait = narf::tensor_traits<typename acc_trait::value_type>;
 
          constexpr bool isTH1 = std::is_base_of<TH1, HIST>::value;
          constexpr bool isTHn = std::is_base_of<THnBase, HIST>::value;
 
          if constexpr (isTH1 || isTHn) {
 
-            fObject->Sumw2();
+            if constexpr (is_weighted_sum) {
+               fObject->Sumw2();
+            }
 
-            if constexpr(trait::is_tensor) {
+            if constexpr(tensor_trait::is_tensor) {
+
+//
 //                std::cout << "tensor conversion" << std::endl;
 
-               auto constexpr tensor_rank = trait::rank;
+               auto constexpr tensor_rank = tensor_trait::rank;
                const auto fillrank = fFillObject->rank();
 
                const auto rank = fillrank + tensor_rank;
@@ -292,11 +303,17 @@ namespace narf {
                      continue;
                   }
                   auto const &acc_val = fFillObject->at(boost_idxs);
-                  auto const &value = std::apply(acc_val.value(), tensor_idxs);
-                  auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
 
-                  fObject->SetBinContent(ibin, value);
-                  narf::set_bin_error2(*fObject, ibin, variance);
+                  if constexpr (is_weighted_sum) {
+                     auto const &value = std::apply(acc_val.value(), tensor_idxs);
+                     auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
+
+                     fObject->SetBinContent(ibin, value);
+                     narf::set_bin_error2(*fObject, ibin, variance);
+                  }
+                  else {
+                     fObject->SetBinContent(ibin, acc_val);
+                  }
                }
             }
             else {
@@ -309,18 +326,29 @@ namespace narf {
                      idxs[idim] = x.index(idim) + 1;
                   }
 
+                  // TODO use overloaded functions to avoid switch on histogram type here
                   if constexpr (isTH1) {
                      const int i = idxs[0];
                      const int j = idxs.size() > 1 ? idxs[1] : 0;
                      const int k = idxs.size() > 2 ? idxs[2] : 0;
                      const auto bin = fObject->GetBin(i, j, k);
-                     fObject->SetBinContent(bin, x->value());
-                     fObject->SetBinError(bin, std::sqrt(x->variance()));
+                     if constexpr (is_weighted_sum) {
+                        fObject->SetBinContent(bin, x->value());
+                        fObject->SetBinError(bin, std::sqrt(x->variance()));
+                     }
+                     else {
+                        fObject->SetBinContent(bin, *x);
+                     }
                   }
                   else if constexpr (isTHn) {
                      const auto bin = fObject->GetBin(idxs.data());
-                     fObject->SetBinContent(bin, x->value());
-                     fObject->SetBinError2(bin, x->variance());
+                     if constexpr (is_weighted_sum) {
+                        fObject->SetBinContent(bin, x->value());
+                        fObject->SetBinError2(bin, x->variance());
+                     }
+                     else {
+                        fObject->SetBinContent(bin, *x);
+                     }
                   }
                }
             }
@@ -333,8 +361,9 @@ namespace narf {
                const auto rank = fObject->rank();
                const auto fillrank = fFillObject->rank();
 
-               if constexpr (trait::is_tensor) {
-                  auto constexpr tensor_rank = trait::rank;
+               if constexpr (tensor_trait::is_tensor) {
+
+                  auto constexpr tensor_rank = tensor_trait::rank;
 
                   std::vector<int> idxs(fillrank, 0);
                   std::array<std::ptrdiff_t, tensor_rank> tensor_idxs;
@@ -354,9 +383,15 @@ namespace narf {
                         continue;
                      }
                      auto const &acc_val = fFillObject->at(idxs);
-                     auto const &value = std::apply(acc_val.value(), tensor_idxs);
-                     auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
-                     *x = std::decay_t<decltype(*x)>(value, variance);
+                     if constexpr (is_weighted_sum) {
+                        auto const &value = std::apply(acc_val.value(), tensor_idxs);
+                        auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
+//                         *x = std::decay_t<decltype(*x)>(value, variance);
+                        *x = { value, variance };
+                     }
+                     else {
+                        *x = std::apply(acc_val, tensor_idxs);
+                     }
                   }
                }
                else {
@@ -366,7 +401,13 @@ namespace narf {
                         idxs[idim] = x.index(idim);
                      }
                      auto const &acc_val = fFillObject->at(idxs);
-                     *x = std::decay_t<decltype(*x)>(acc_val.value(), acc_val.variance());
+                     if constexpr (is_weighted_sum) {
+//                         *x = std::decay_t<decltype(*x)>(acc_val.value(), acc_val.variance());
+                        *x = { acc_val.value(), acc_val.variance() };
+                     }
+                     else {
+                        *x = acc_val;
+                     }
                   }
                }
             }

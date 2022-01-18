@@ -180,28 +180,34 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     if tensor_weight:
         # weight is a tensor type, using tensor-storage directly
-        if not isinstance(storage, bh.storage.Weight):
-            raise TypeError("Only Weight storage is supported with tensor weights currently")
+        tensor_type = coltypes[-1]
+
+        if isinstance(storage, bh.storage.Double):
+            cppstoragetype = ROOT.narf.TensorAccumulator[tensor_type]
+        elif isinstance(storage, bh.storage.Weight):
+            cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
+        else:
+            raise TypeError("Requested storage type is not supported with tensor weights currently")
 
         cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
-        tensor_type = coltypes[-1]
-        cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
+
         if force_atomic:
             cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
+
+        print("storage type: ", cppstoragetype.__cpp_name__)
         hfill = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
 
-    if hfill is None:
-        helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
-    else:
         #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
 
         helper = ROOT.narf.FillBoostHelperAtomic[type(h), type(hfill)](ROOT.std.move(h), ROOT.std.move(hfill))
 
-        #targs = tuple([type(df), type(helper)] + coltypes)
-        #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
-        #targsstr = ",".join(targsnames)
-        #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(h).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
-        #assert(0)
+        targs = tuple([type(df), type(helper)] + coltypes)
+        targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
+        targsstr = ",".join(targsnames)
+        ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(h).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+        assert(0)
+    else:
+        helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
 
     targs = tuple([type(df), type(helper)] + coltypes)
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)

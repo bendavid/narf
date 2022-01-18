@@ -4,6 +4,7 @@
 #include <atomic>
 #include <boost/histogram/detail/priority.hpp>
 #include <type_traits>
+#include "traits.h"
 #include "tensorutils.h"
 
 namespace narf {
@@ -185,6 +186,31 @@ struct atomic_adaptor<T, std::enable_if_t<std::is_floating_point<T>::value>> : a
 };
 
 
+// specialization for tensor case, to move the atomic wrapper inside the tensor (ie atomicity applies
+// only element by element)
+
+template <typename T, typename Dimensions_, int Options_, typename IndexType>
+struct atomic_adaptor<TensorAccumulator<Eigen::TensorFixedSize<T, Dimensions_, Options_, IndexType>>> : public TensorAccumulator<Eigen::TensorFixedSize<atomic_adaptor<T>, Dimensions_, Options_, IndexType>> {
+
+private:
+  using base_t = TensorAccumulator<Eigen::TensorFixedSize<atomic_adaptor<T>, Dimensions_, Options_, IndexType>>;
+  using Tensor_t = Eigen::TensorFixedSize<T, Dimensions_, Options_, IndexType>;
+
+public:
+
+  // constructors from base class
+  using base_t::base_t;
+
+  // avoid unnecessary conversion to atomic and back by taking a weight of the
+  // underlying type directly
+  atomic_adaptor &operator+=(const boost::histogram::weight_type<const Tensor_t&> &w) {
+    base_t::operator+=(w.value);
+    return *this;
+  }
+
+  static constexpr bool thread_safe() noexcept { return true; }
+};
+
 // specializations for weighted_sum exploiting the fact that value and variance
 // can be incremented independently
 // n.b. this leads to slightly weaker atomicity guarantees, in that a
@@ -235,6 +261,10 @@ public:
   }
 
   static constexpr bool thread_safe() noexcept { return true; }
+};
+
+template <typename T>
+struct acc_traits<atomic_adaptor<T>> : public acc_traits<T> {
 };
 
 
