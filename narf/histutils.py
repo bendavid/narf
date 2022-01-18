@@ -231,39 +231,6 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     return res
 
-def _histo_boost_arr(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled()):
-    coltypes = [df.GetColumnType(col) for col in cols]
-
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
-    #cppstoragetype = f"boost::histogram::accumulators::weighted_sum<{coltypes[-1].__cpp_name__}>"
-    #cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[coltypes[-1]];
-
-    cppstoragetype = ROOT.narf.atomic_adaptor[ROOT.boost.histogram.accumulators.weighted_sum[coltypes[-1]]];
-
-    #eigentype = "Eigen::TensorFixedSize<narf::atomic_adaptor<double>, Eigen::Sizes<103>>"
-    #cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[eigentype];
-
-    #print(ROOT.boost.histogram.dense_storage)
-
-    #cppstoragetype = ROOT.boost.histogram.dense_storage[ROOT.boost.histogram.accumulators.weighted_sum[coltypes[-1]]]
-
-    #print(cppstoragetype)
-
-    h = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
-
-    #print(type(h))
-    #assert(0)
-
-    #h = ROOT.narf.make_histogram_with_adaptable(ROOT.std.move(cppstoragetype()), *cppaxes)
-
-    helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
-    targs = tuple([type(df), type(helper)] + coltypes)
-    res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
-
-    return res
-
-
-
 def _convert_root_axis(axis):
     is_regular = axis.GetXbins().fN == 0
 
@@ -607,5 +574,3 @@ def pythonize_rdataframe(klass):
     klass.Histo3DWithBoost = _histo3d_with_boost
     klass.HistoNDWithBoost = _histond_with_boost
     klass.SumAndCount = _sum_and_count
-
-    klass.HistoBoostArr = _histo_boost_arr
