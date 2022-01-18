@@ -79,9 +79,18 @@ def build_and_run(datasets, build_function):
             raise ValueError(errmsg)
 
         dsetresult = {}
-        dsetresult["dataset"] = dataset
-        dsetresult["weightsum"] = hweight[0].GetValue()
 
+        dsetresult["dataset"] = { "name" : dataset.name,
+                                  "filepaths" : dataset.filepaths,
+                                  "is_data" : dataset.is_data,
+                                  "xsec" : dataset.xsec,
+                                  "lumi_csv" : dataset.lumi_csv,
+                                  "lumi_json" : dataset.lumi_json,
+                                }
+
+
+        dsetresult["weight_sum"] = float(hweight[0].GetValue())
+        dsetresult["event_count"] = float(evtcount.GetValue())
 
         if dataset.name in lumisums:
             hlumi = ROOT.TH1D("lumi", "lumi", 1, 0.5, 1.5)
