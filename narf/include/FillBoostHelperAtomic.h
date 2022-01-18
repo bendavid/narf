@@ -333,13 +333,6 @@ namespace narf {
                const auto rank = fObject->rank();
                const auto fillrank = fFillObject->rank();
 
-
-
-               std::cout << TClass::GetClass<decltype(fFillObject->begin()->value())>()->GetName() << std::endl;
-
-               std::cout << trait::is_tensor << std::endl;
-               std::cout << trait::is_container << std::endl;
-
                if constexpr (trait::is_tensor) {
                   auto constexpr tensor_rank = trait::rank;
 
