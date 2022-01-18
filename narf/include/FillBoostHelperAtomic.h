@@ -6,6 +6,7 @@
 #include "TROOT.h"
 #include "ROOT/RDF/Utils.hxx"
 #include "ROOT/RDF/ActionHelpers.hxx"
+#include "histutils.h"
 
 #include <iostream>
 #include <array>
@@ -159,7 +160,18 @@ namespace narf {
       FillBoostHelperAtomic(FillBoostHelperAtomic &&) = default;
       FillBoostHelperAtomic(const FillBoostHelperAtomic &) = delete;
 
-      FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))), fFillObject(fObject) {
+//       template <typename = std::enable_if_t<std::is_same_v<HIST, HISTFILL>>>
+//       FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))), fFillObject(fObject) {
+//
+// //          if (ROOT::IsImplicitMTEnabled() && !HISTFILL::storage_type::has_threading_support) {
+// //             throw std::runtime_error("multithreading is enabled but histogram is not thread-safe, not currently supported");
+// //          }
+//       }
+
+      FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))) {
+         if constexpr(std::is_same_v<HIST, HISTFILL>) {
+            fFillObject = fObject;
+         }
 
          if (ROOT::IsImplicitMTEnabled() && !HISTFILL::storage_type::has_threading_support) {
             throw std::runtime_error("multithreading is enabled but histogram is not thread-safe, not currently supported");
@@ -236,6 +248,8 @@ namespace narf {
       }
 
       void Finalize() {
+         using trait = narf::tensor_traits<std::decay_t<decltype(fFillObject->begin()->value())>>;
+
 
          constexpr bool isTH1 = std::is_base_of<TH1, HIST>::value;
          constexpr bool isTHn = std::is_base_of<THnBase, HIST>::value;
@@ -244,33 +258,129 @@ namespace narf {
 
             fObject->Sumw2();
 
-            const auto rank = fFillObject->rank();
+            if constexpr(trait::is_tensor) {
+//                std::cout << "tensor conversion" << std::endl;
 
-            std::vector<int> idxs(rank, 0);
-            for (auto&& x: indexed(*fFillObject, coverage::all)) {
+               auto constexpr tensor_rank = trait::rank;
+               const auto fillrank = fFillObject->rank();
 
-               for (unsigned int idim = 0; idim < rank; ++idim) {
-                  // convert from boost to root numbering convention
-                  idxs[idim] = x.index(idim) + 1;
+               const auto rank = fillrank + tensor_rank;
+
+
+//                std::cout << "fillrank = " << fillrank << " rank = " << rank << " tensor_rank = " << tensor_rank << std::endl;
+
+               // has to be at least 3 for TH1 case
+               std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
+               std::vector<int> boost_idxs(fillrank);
+               std::array<std::ptrdiff_t, tensor_rank> tensor_idxs;
+               const auto nbins = narf::get_n_bins(*fObject);
+               for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
+                  narf::fill_idxs(*fObject, ibin, idxs);
+
+                  // convert from root to boost numbering/zero-indexing
+                  for (unsigned int idim = 0; idim < fillrank; ++idim) {
+                     boost_idxs[idim] = idxs[idim] - 1;
+                  }
+
+                  // convert from root to boost numbering/zero-indexing
+                  for (unsigned int idim = 0; idim < tensor_rank; ++idim) {
+                     tensor_idxs[idim] = idxs[fillrank + idim] - 1;
+                  }
+                  // no overflow or underflow for tensor, so corresponding bins
+                  // are unfilled and zero by construction
+                  if (*std::min_element(tensor_idxs.begin(), tensor_idxs.end()) < 0) {
+                     continue;
+                  }
+                  auto const &acc_val = fFillObject->at(boost_idxs);
+                  auto const &value = std::apply(acc_val.value(), tensor_idxs);
+                  auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
+
+                  fObject->SetBinContent(ibin, value);
+                  narf::set_bin_error2(*fObject, ibin, variance);
                }
+            }
+            else {
+               const auto rank = fFillObject->rank();
+               std::vector<int> idxs(rank, 0);
+               for (auto&& x: indexed(*fFillObject, coverage::all)) {
 
-               if constexpr (isTH1) {
-                  const int i = idxs[0];
-                  const int j = idxs.size() > 1 ? idxs[1] : 0;
-                  const int k = idxs.size() > 2 ? idxs[2] : 0;
-                  const auto bin = fObject->GetBin(i, j, k);
-                  fObject->SetBinContent(bin, x->value());
-                  fObject->SetBinError(bin, std::sqrt(x->variance()));
+                  for (unsigned int idim = 0; idim < rank; ++idim) {
+                     // convert from boost to root numbering convention
+                     idxs[idim] = x.index(idim) + 1;
+                  }
+
+                  if constexpr (isTH1) {
+                     const int i = idxs[0];
+                     const int j = idxs.size() > 1 ? idxs[1] : 0;
+                     const int k = idxs.size() > 2 ? idxs[2] : 0;
+                     const auto bin = fObject->GetBin(i, j, k);
+                     fObject->SetBinContent(bin, x->value());
+                     fObject->SetBinError(bin, std::sqrt(x->variance()));
+                  }
+                  else if constexpr (isTHn) {
+                     const auto bin = fObject->GetBin(idxs.data());
+                     fObject->SetBinContent(bin, x->value());
+                     fObject->SetBinError2(bin, x->variance());
+                  }
                }
-               else if constexpr (isTHn) {
-                  const auto bin = fObject->GetBin(idxs.data());
-                  fObject->SetBinContent(bin, x->value());
-                  fObject->SetBinError2(bin, x->variance());
+            }
+         }
+         else {
+            //TODO multithreading for this
+            // these might or might not be the same type, so just check the addresses
+            if (static_cast<void*>(fFillObject.get()) != static_cast<void*>(fObject.get())) {
+               // fill from one boost histogram to another
+               const auto rank = fObject->rank();
+               const auto fillrank = fFillObject->rank();
+
+
+
+               std::cout << TClass::GetClass<decltype(fFillObject->begin()->value())>()->GetName() << std::endl;
+
+               std::cout << trait::is_tensor << std::endl;
+               std::cout << trait::is_container << std::endl;
+
+               if constexpr (trait::is_tensor) {
+                  auto constexpr tensor_rank = trait::rank;
+
+                  std::vector<int> idxs(fillrank, 0);
+                  std::array<std::ptrdiff_t, tensor_rank> tensor_idxs;
+                  for (auto&& x: indexed(*fObject, coverage::all)) {
+//                      std::cout << "element" << std::endl;
+                     for (unsigned int idim = 0; idim < fillrank; ++idim) {
+                        idxs[idim] = x.index(idim);
+//                         std::cout << "primary idx: " << idim << " " << idxs[idim] << std::endl;
+                     }
+                     for (unsigned int idim = 0; idim < tensor_rank; ++idim) {
+                        tensor_idxs[idim] = x.index(fillrank + idim);
+//                         std::cout << "tensor idx: " << idim << " " << tensor_idxs[idim] << std::endl;
+                     }
+                     // skip overflow/underflow bins for axes corresponding to the tensor weight
+                     // since these are not filled and are zero by construction
+                     if (*std::min_element(tensor_idxs.begin(), tensor_idxs.end()) < 0) {
+                        continue;
+                     }
+                     auto const &acc_val = fFillObject->at(idxs);
+                     auto const &value = std::apply(acc_val.value(), tensor_idxs);
+                     auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
+                     *x = std::decay_t<decltype(*x)>(value, variance);
+                  }
+               }
+               else {
+                  std::vector<int> idxs(rank, 0);
+                  for (auto&& x: indexed(*fObject, coverage::all)) {
+                     for (unsigned int idim = 0; idim < rank; ++idim) {
+                        idxs[idim] = x.index(idim);
+                     }
+                     auto const &acc_val = fFillObject->at(idxs);
+                     *x = std::decay_t<decltype(*x)>(acc_val.value(), acc_val.variance());
+                  }
                }
             }
          }
 
          fFillObject.reset();
+
       }
 
       std::shared_ptr<HIST> GetResultPtr() const {

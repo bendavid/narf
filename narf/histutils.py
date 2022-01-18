@@ -13,6 +13,9 @@ import cppyy.ll
 ROOT.gInterpreter.Declare('#include "histutils.h"')
 ROOT.gInterpreter.Declare('#include "FillBoostHelperAtomic.h"')
 
+ROOT.gInterpreter.Declare('#include <eigen3/Eigen/Dense>')
+ROOT.gInterpreter.Declare('#include <eigen3/unsupported/Eigen/CXX11/Tensor>')
+
 def bool_to_string(b):
     if b:
         return "true"
@@ -61,7 +64,7 @@ def convert_axis(axis):
     else:
         raise TypeError("axis must be a boost_histogram or compatible axis")
 
-def convert_storage_type(storage, force_atomic):
+def convert_storage_type(storage, force_atomic = False):
     if isinstance(storage, bh.storage.Double):
         if force_atomic:
             return "narf::atomic_adaptor<double>"
@@ -78,7 +81,8 @@ def convert_storage_type(storage, force_atomic):
         return "boost::histogram::accumulators::count<std::int64_t, true>"
     elif isinstance(storage, bh.storage.Weight):
         if force_atomic:
-            return "boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>"
+            #return "boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>"
+            return "narf::atomic_adaptor<boost::histogram::accumulators::weighted_sum<double>>"
         else:
             return "boost::histogram::accumulators::weighted_sum<double>"
     elif isinstance(storage, bh.storage.Mean):
@@ -101,7 +105,25 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     #storage = bh.storage.Mean()
 
-    _hist = hist.Hist(*axes, storage = storage)
+    #TODO this code can be shared with root histogram version
+
+    coltypes = [df.GetColumnType(col) for col in cols]
+
+    has_weight = len(cols) == (len(axes) + 1)
+    tensor_weight = False
+    python_axes = axes.copy()
+
+    if has_weight:
+        traits = ROOT.narf.tensor_traits[coltypes[-1]]
+        if traits.is_tensor:
+            # weight is a tensor-type, use optimized storage and create additional axes
+            # corresponding to tensor indices
+            for size in traits.get_sizes():
+                tensor_weight = True
+                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False))
+
+
+    _hist = hist.Hist(*python_axes, storage = storage)
 
     arr = _hist.view(flow = True).__array_interface__
 
@@ -130,8 +152,8 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         raise ValueError("memory is not a contiguous fortran-style array as required by the C++ class")
 
     #cppaxes = [convert_axis(axis) for axis in axes]
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
-    cppstoragetype = convert_storage_type(storage, force_atomic)
+    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
+    cppstoragetype = convert_storage_type(storage, force_atomic = force_atomic and not tensor_weight)
 
     h = ROOT.narf.make_histogram_adopted[cppstoragetype](addr, size_bytes, *cppaxes)
 
@@ -152,8 +174,33 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
             if addr_diff != stride:
                 raise ValueError("mismatched storage ordering")
 
-    helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
-    coltypes = [df.GetColumnType(col) for col in cols]
+    hfill = None
+
+    if tensor_weight:
+        # weight is a tensor type, using tensor-storage directly
+        if not isinstance(storage, bh.storage.Weight):
+            raise TypeError("Only Weight storage is supported with tensor weights currently")
+
+        cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+        tensor_type = coltypes[-1]
+        cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
+        if force_atomic:
+            cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
+        hfill = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
+
+    if hfill is None:
+        helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
+    else:
+        #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
+
+        helper = ROOT.narf.FillBoostHelperAtomic[type(h), type(hfill)](ROOT.std.move(h), ROOT.std.move(hfill))
+
+        #targs = tuple([type(df), type(helper)] + coltypes)
+        #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
+        #targsstr = ",".join(targsnames)
+        #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(h).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+        #assert(0)
+
     targs = tuple([type(df), type(helper)] + coltypes)
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
 
@@ -183,6 +230,38 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     res.__getitem__ = hist_getitem
 
     return res
+
+def _histo_boost_arr(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled()):
+    coltypes = [df.GetColumnType(col) for col in cols]
+
+    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+    #cppstoragetype = f"boost::histogram::accumulators::weighted_sum<{coltypes[-1].__cpp_name__}>"
+    #cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[coltypes[-1]];
+
+    cppstoragetype = ROOT.narf.atomic_adaptor[ROOT.boost.histogram.accumulators.weighted_sum[coltypes[-1]]];
+
+    #eigentype = "Eigen::TensorFixedSize<narf::atomic_adaptor<double>, Eigen::Sizes<103>>"
+    #cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[eigentype];
+
+    #print(ROOT.boost.histogram.dense_storage)
+
+    #cppstoragetype = ROOT.boost.histogram.dense_storage[ROOT.boost.histogram.accumulators.weighted_sum[coltypes[-1]]]
+
+    #print(cppstoragetype)
+
+    h = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
+
+    #print(type(h))
+    #assert(0)
+
+    #h = ROOT.narf.make_histogram_with_adaptable(ROOT.std.move(cppstoragetype()), *cppaxes)
+
+    helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
+    targs = tuple([type(df), type(helper)] + coltypes)
+    res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
+
+    return res
+
 
 
 def _convert_root_axis(axis):
@@ -372,8 +451,7 @@ def _convert_root_axis_info(nbins, xlow, xhigh, edges):
     else:
         return ROOT.boost.histogram.axis.regular[""](nbins, xlow, xhigh)
 
-
-def _convert_root_model(model):
+def _histo_with_boost(df, model, cols):
 
     axes_info = []
 
@@ -395,18 +473,85 @@ def _convert_root_model(model):
             axes_info.append((nbins, xlow, xhigh, edges))
 
     boost_axes = [_convert_root_axis_info(*axis_info) for axis_info in axes_info]
-    boost_hist = ROOT.narf.make_atomic_histogram_with_error(*boost_axes)
-
-    return hist_type, boost_hist
-
-
-
-def _histo_with_boost(df, model, cols):
-
-    hist_type, boost_hist = _convert_root_model(model)
-    helper = ROOT.narf.FillBoostHelperAtomic[hist_type, type(boost_hist)](model, ROOT.std.move(boost_hist))
 
     coltypes = [df.GetColumnType(col) for col in cols]
+
+    has_weight = len(cols) == (len(axes_info) + 1)
+    tensor_weight = False
+
+    if has_weight:
+        traits = ROOT.narf.tensor_traits[coltypes[-1]]
+        if traits.is_tensor:
+            # weight is a tensor-type, use optimized storage and create additional axes
+            # corresponding to tensor indices
+            tensor_weight = True
+
+            is_regular = True
+            for axis_info in axes_info:
+                if axis_info[3]:
+                    is_regular = False
+
+            for size in traits.get_sizes():
+                if is_regular:
+                    axes_info.append((size, -0.5, float(size) - 0.5, []))
+                else:
+                    axes_info.append((size, 0., 64., np.arange(size+1, dtype=np.float64) - 0.5))
+
+            if len(axes_info) == 1:
+                hist_type = ROOT.TH1D
+                if is_regular:
+                    model = ROOT.RDF.TH1DModel(model.fName, model.fTitle,
+                                               axes_info[0][0], axes_info[0][1], axes_info[0][2])
+                else:
+                    model = ROOT.RDF.TH1DModel(model.fName, model.fTitle,
+                                               axes_info[0][0], axes_info[0][3])
+            elif len(axes_info) == 2:
+                hist_type = ROOT.TH2D
+                if is_regular:
+                    model = ROOT.RDF.TH1DModel(model.fName, model.fTitle,
+                                               axes_info[0][0], axes_info[0][1], axes_info[0][2],
+                                               axes_info[1][0], axes_info[1][1], axes_info[1][2])
+                else:
+                    model = ROOT.RDF.TH2DModel(model.fName, model.fTitle,
+                                               axes_info[0][0], axes_info[0][3],
+                                               axes_info[1][0], axes_info[1][3])
+            elif len(axes_info) == 3:
+                hist_type = ROOT.TH2D
+                if is_regular:
+                    model = ROOT.RDF.TH1DModel(model.fName, model.fTitle,
+                                               axes_info[0][0], axes_info[0][1], axes_info[0][2],
+                                               axes_info[1][0], axes_info[1][1], axes_info[1][2],
+                                               axes_info[2][0], axes_info[2][1], axes_info[2][2])
+                else:
+                    model = ROOT.RDF.TH2DModel(model.fName, model.fTitle,
+                                               axes_info[0][0], axes_info[0][3],
+                                               axes_info[1][0], axes_info[1][3],
+                                               axes_info[2][0], axes_info[2][3])
+            else:
+                hist_type = hist_type = ROOT.THnT["double"]
+                if is_regular:
+                    model = ROOT.RDF.THnDModel(model.fName, model.fTitle, len(axes_info),
+                                               [axis_info[0] for axis_info in axes_info],
+                                               [axis_info[1] for axis_info in axes_info],
+                                               [axis_info[2] for axis_info in axes_info])
+                else:
+                    model = ROOT.RDF.THnDModel(model.fName, model.fTitle, len(axes_info),
+                                               [axis_info[0] for axis_info in axes_info],
+                                               [axis_info[3] for axis_info in axes_info])
+
+
+
+    if tensor_weight:
+        tensor_type = coltypes[-1]
+        cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
+        cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
+        boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*boost_axes)
+    else:
+        boost_hist = ROOT.narf.make_atomic_histogram_with_error(*boost_axes)
+
+
+    helper = ROOT.narf.FillBoostHelperAtomic[hist_type, type(boost_hist)](model, ROOT.std.move(boost_hist))
+
     targs = tuple([type(df), type(helper)] + coltypes)
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
 
@@ -462,3 +607,5 @@ def pythonize_rdataframe(klass):
     klass.Histo3DWithBoost = _histo3d_with_boost
     klass.HistoNDWithBoost = _histond_with_boost
     klass.SumAndCount = _sum_and_count
+
+    klass.HistoBoostArr = _histo_boost_arr

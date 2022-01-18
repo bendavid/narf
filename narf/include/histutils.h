@@ -6,6 +6,8 @@
 #include "atomic_adaptor.h"
 #include <ROOT/RResultPtr.hxx>
 #include <iostream>
+#include <eigen3/Eigen/Dense>
+#include <eigen3/unsupported/Eigen/CXX11/Tensor>
 
 namespace narf {
   using namespace boost::histogram;
@@ -35,9 +37,9 @@ namespace narf {
   }
 
   template<typename Axis, typename... Axes>
-  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>>>
+  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<narf::atomic_adaptor<boost::histogram::accumulators::weighted_sum<double>>>>
   make_atomic_histogram_with_error(Axis&& axis, Axes&&... axes) {
-    return make_histogram_with(dense_storage<boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
+    return make_histogram_with(dense_storage<narf::atomic_adaptor<boost::histogram::accumulators::weighted_sum<double>>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
   }
 
   template<typename Storage, typename... Axes>
@@ -50,6 +52,12 @@ namespace narf {
   histogram<std::tuple<std::decay_t<Axes>...>, storage_adaptor<Storage>>
   make_histogram_with_adaptable(Storage &&storage, Axes&&... axes) {
     return make_histogram_with(std::forward<Storage>(storage), std::forward<Axes>(axes)...);
+  }
+
+  template<typename T, typename... Axes>
+  histogram<std::tuple<std::decay_t<Axes>...>, dense_storage<T>>
+  make_histogram_dense(Axes&&... axes) {
+    return make_histogram_with(dense_storage<T>(), std::forward<Axes>(axes)...);
   }
 
   template<typename T, typename A, typename... Axes>
@@ -195,6 +203,18 @@ namespace narf {
   }
 
 }
+
+// template <typename T, typename... Args>
+// Eigen::TensorFixedSize<narf::atomic_adaptor<T>, Args...> &operator+=(Eigen::TensorFixedSize<narf::atomic_adaptor<T>, Args...> &lhs, const Eigen::TensorFixedSize<T, Args...> &rhs) {
+//   lhs += rhs.template cast<narf::atomic_adaptor<T>>();
+//   return lhs;
+// }
+
+// template <typename T, typename... Args>
+// operator Eigen::TensorFixedSize<narf::atomic_adaptor<T>, Args...> (const Eigen::TensorFixedSize<narf::atomic_adaptor<T>, Args...> &rhs) {
+//   return rhs.template cast<narf::atomic_adaptor<T>>();
+// }
+
 
 
 #endif
