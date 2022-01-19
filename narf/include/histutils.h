@@ -3,7 +3,9 @@
 
 #include <boost/histogram.hpp>
 #include "adopted_storage.h"
+#include "traits.h"
 #include "atomic_adaptor.h"
+#include "tensorutils.h"
 #include <ROOT/RResultPtr.hxx>
 #include <iostream>
 #include <eigen3/Eigen/Dense>
@@ -200,6 +202,23 @@ namespace narf {
         set_bin_error2(hist, ibin, vars[offsetvar]);
       }
     }
+  }
+
+  template <typename HIST>
+  bool check_storage_order(const HIST &hist, const std::vector<int> &strides) {
+    const std::vector<int> origin(strides.size(), 0);
+    const auto *origin_addr = &hist.at(origin);
+    for (std::size_t idim; idim <strides.size(); ++idim) {
+      std::vector<int> coords(strides.size(), 0);
+      coords[idim] = 1;
+      const auto *addr = &hist.at(coords);
+      const ptrdiff_t addr_diff = addr - origin_addr;
+      if (addr_diff != strides[idim]) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
 }

@@ -185,6 +185,9 @@ struct atomic_adaptor<T, std::enable_if_t<std::is_floating_point<T>::value>> : a
 
 };
 
+template <typename T>
+struct acc_traits<atomic_adaptor<T>> : public acc_traits<T> {
+};
 
 // specialization for tensor case, to move the atomic wrapper inside the tensor (ie atomicity applies
 // only element by element)
@@ -211,25 +214,10 @@ public:
     return *this;
   }
 
-
-  //TODO do we need this generic version?
-//   template <typename U>
-//   atomic_adaptor &operator+=(const Eigen::TensorFixedSize<U, Dimensions_, Options_, IndexType> &rhs) {
-//     const U *itr = rhs.data();
-//     for (typename base_t::Scalar *it = base_t::data(); it != base_t::data() + base_t::size(); ++it, ++itr) {
-//       (*it) += *itr;
-//     }
-//     return *this;
-//   }
-
-//   atomic_adaptor &operator+=(atomic_adaptor &rhs) {
-//     operator+=(rhs);
-//     return *this;
-//   }
-
   // avoid unnecessary conversion to atomic and back by taking a weight of the
   // underlying type directly
-  atomic_adaptor &operator+=(const boost::histogram::weight_type<const Tensor_t&> &w) {
+  template <typename U>
+  atomic_adaptor &operator+=(const boost::histogram::weight_type<U> &w) {
     operator+=(w.value);
     return *this;
   }
@@ -243,57 +231,48 @@ public:
 // thread reading a bin concurrent with another writing may
 // observe inconsistent value vs variance (e.g. value before modification and variance
 // after modification, or vice-versa)
-// template <typename T>
-// struct atomic_adaptor<boost::histogram::accumulators::weighted_sum<T>> : public boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>> {
-//   // constructors from base class
-//   using boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>>::weighted_sum;
-//
-// //   // avoid unnecessary conversion to atomic and back by taking a weight of the
-// //   // underlying type directly
-// //   atomic_adaptor& operator+=(const boost::histogram::weight_type<const T&>& w) {
-// // //   atomic_adaptor& operator+=(const boost::histogram::weight_type<T>& w) {
-// //     // FIXME boost::histogram::weighted_sum data members should be protected
-// //     // rather than private to avoid the need for const_cast here
-// //     const_cast<atomic_adaptor<T>&>(this->value()) += w.value;
-// //     // helps for types which use expression templates (e.g. eigen tensors)
-// //     const_cast<atomic_adaptor<T>&>(this->variance()) += w.value*w.value;
-// //     return *this;
-// //   }
-//
-//   static constexpr bool thread_safe() noexcept { return true; }
-//
-// };
+template <typename T>
+struct atomic_adaptor<boost::histogram::accumulators::weighted_sum<T>> : public boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>> {
+  // constructors from base class
+  using boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>>::weighted_sum;
 
-// template <typename T, typename Dimensions_, int Options_, typename IndexType>
-// struct atomic_adaptor<boost::histogram::accumulators::weighted_sum<TensorAccumulator<Eigen::TensorFixedSize<T, Dimensions_, Options_, IndexType>>>> : public boost::histogram::accumulators::weighted_sum<TensorAccumulator<Eigen::TensorFixedSize<atomic_adaptor<T>, Dimensions_, Options_, IndexType>>> {
-//
-// private:
-//   using Tensor_t = Eigen::TensorFixedSize<T, Dimensions_, Options_, IndexType>;
-//   using AtomicTensorAcc_t = TensorAccumulator<Eigen::TensorFixedSize<atomic_adaptor<T>, Dimensions_, Options_, IndexType>>;
-//   using base_t = boost::histogram::accumulators::weighted_sum<AtomicTensorAcc_t>;
-//
-// public:
-//
-//   // constructors from base class
-//   using base_t::base_t;
-//
-//   // avoid unnecessary conversion to atomic and back by taking a weight of the
-//   // underlying type directly
-//   atomic_adaptor& operator+=(const boost::histogram::weight_type<const Tensor_t&>& w) {
-//     // FIXME boost::histogram::weighted_sum data members should be protected
-//     // rather than private to avoid the need for const_cast here
-//     const_cast<AtomicTensorAcc_t&>(this->value()) += w.value;
-//     const Tensor_t wsq = w.value.square();
-//     const_cast<AtomicTensorAcc_t&>(this->variance()) += wsq;
-//     return *this;
-//   }
-//
-//   static constexpr bool thread_safe() noexcept { return true; }
-// };
-//
-// template <typename T>
-// struct acc_traits<atomic_adaptor<T>> : public acc_traits<T> {
-// };
+  // avoid unnecessary conversion to atomic and back by taking a weight of the
+  // underlying type directly
+  atomic_adaptor& operator+=(const boost::histogram::weight_type<const T&>& w) {
+    // FIXME boost::histogram::weighted_sum data members should be protected
+    // rather than private to avoid the need for const_cast here
+    const_cast<atomic_adaptor<T>&>(this->value()) += w.value;
+    const_cast<atomic_adaptor<T>&>(this->variance()) += w.value*w.value;
+    return *this;
+  }
+
+  static constexpr bool thread_safe() noexcept { return true; }
+};
+
+
+template <typename T>
+struct atomic_adaptor<tensor_weighted_sum<T>> : public tensor_weighted_sum<atomic_adaptor<T>> {
+
+private:
+  using base_t = tensor_weighted_sum<atomic_adaptor<T>>;
+
+public:
+  // constructors from base class
+  using base_t::base_t;
+
+  // avoid unnecessary conversion to atomic and back by taking a weight of the
+  // underlying type directly
+  template <typename U>
+  atomic_adaptor &operator+=(const boost::histogram::weight_type<U> &w) {
+    // FIXME boost::histogram::weighted_sum data members should be protected
+    // rather than private to avoid the need for const_cast here
+    const_cast<atomic_adaptor<T>&>(this->value()) += w.value;
+    const_cast<atomic_adaptor<T>&>(this->variance()) += w.value*w.value;
+    return *this;
+  }
+
+  static constexpr bool thread_safe() noexcept { return true; }
+};
 
 
 } // namespace narf
@@ -309,66 +288,8 @@ auto accumulator_traits_impl(narf::atomic_adaptor<T>&, priority<2>)
 
 }
 
-// specializations for weight_type so that underlying types are used
-// template <typename T>
-// struct weight_type<atomic_adaptor
-
-
-// template <typename T>
-// struct weight_type<narf::atomic_adaptor<T>> : public weight_type<T> {
-// private:
-//   using base_t = weight_type<T>;
-//
-// public:
-//   weight_type(const base_t &other) : base_t(other) { std::cout << "converting constructor\n"; }
-// };
-
-// template <typename T>
-// struct weight_type<narf::atomic_adaptor<T>&> : public weight_type<T&> {
-// };
-//
-// template <typename T>
-// struct weight_type<narf::atomic_adaptor<T>&&> : public weight_type<T&&> {
-// };
-//
-// template <typename T>
-// struct weight_type<const narf::atomic_adaptor<T>> : public weight_type<const T> {
-// };
-//
-// template <typename T>
-// struct weight_type<const narf::atomic_adaptor<T>&> : public weight_type<const T&> {
-// };
-//
-// template <typename T>
-// struct weight_type<const narf::atomic_adaptor<T>&&> : public weight_type<const T&&> {
-// };
-
 }
 }
 
-namespace narf {
-
-template <typename T>
-struct atomic_adaptor<boost::histogram::accumulators::weighted_sum<T>> : public boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>> {
-  // constructors from base class
-  using boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>>::weighted_sum;
-
-  // avoid unnecessary conversion to atomic and back by taking a weight of the
-  // underlying type directly
-//   atomic_adaptor& operator+=(const boost::histogram::weight_type<const T&>& w) {
-//   atomic_adaptor& operator+=(const boost::histogram::weight_type<atomic_adaptor<T>>& w) {
-//     // FIXME boost::histogram::weighted_sum data members should be protected
-//     // rather than private to avoid the need for const_cast here
-// //     const_cast<atomic_adaptor<T>&>(this->value()) += w.value;
-//     // helps for types which use expression templates (e.g. eigen tensors)
-// //     const_cast<atomic_adaptor<T>&>(this->variance()) += w.value*w.value;
-//     return *this;
-//   }
-
-  static constexpr bool thread_safe() noexcept { return true; }
-
-};
-
-}
 
 #endif

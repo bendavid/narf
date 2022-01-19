@@ -160,14 +160,6 @@ namespace narf {
       FillBoostHelperAtomic(FillBoostHelperAtomic &&) = default;
       FillBoostHelperAtomic(const FillBoostHelperAtomic &) = delete;
 
-//       template <typename = std::enable_if_t<std::is_same_v<HIST, HISTFILL>>>
-//       FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))), fFillObject(fObject) {
-//
-// //          if (ROOT::IsImplicitMTEnabled() && !HISTFILL::storage_type::has_threading_support) {
-// //             throw std::runtime_error("multithreading is enabled but histogram is not thread-safe, not currently supported");
-// //          }
-//       }
-
       FillBoostHelperAtomic(HIST &&h) : fObject(std::make_shared<HIST>(std::move(h))) {
          if constexpr(std::is_same_v<HIST, HISTFILL>) {
             fFillObject = fObject;
@@ -255,6 +247,9 @@ namespace narf {
          using acc_trait = narf::acc_traits<acc_t>;
 
          constexpr bool is_weighted_sum = acc_trait::is_weighted_sum;
+
+//          std::cout << "is_weighted_sum = " << is_weighted_sum << std::endl;
+//          std::cout << TClass::GetClass<acc_t>()->GetName() << std::endl;
 
          using tensor_trait = narf::tensor_traits<typename acc_trait::value_type>;
 
@@ -362,7 +357,6 @@ namespace narf {
                const auto fillrank = fFillObject->rank();
 
                if constexpr (tensor_trait::is_tensor) {
-
                   auto constexpr tensor_rank = tensor_trait::rank;
 
                   std::vector<int> idxs(fillrank, 0);
@@ -402,7 +396,6 @@ namespace narf {
                      }
                      auto const &acc_val = fFillObject->at(idxs);
                      if constexpr (is_weighted_sum) {
-//                         *x = std::decay_t<decltype(*x)>(acc_val.value(), acc_val.variance());
                         *x = { acc_val.value(), acc_val.variance() };
                      }
                      else {

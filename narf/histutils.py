@@ -163,18 +163,10 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     #storage = ROOT.narf.adopted_storage[cppstoragetype](bufptr, size_bytes)
     #h = ROOT.narf.make_histogram_with_storage(ROOT.std.move(storage), *cppaxes)
 
-    # confirm storage order empirically
-    if len(shape) > 1:
-        origin = (0,)*len(shape)
-        origin_addr = ROOT.addressof(h.at(*origin))
+    storage_order_match = ROOT.narf.check_storage_order(h, strides)
 
-        for iaxis, stride in enumerate(strides):
-            coords = [0,]*len(shape)
-            coords[iaxis] = 1
-            addr = ROOT.addressof(h.at(*coords))
-            addr_diff = addr - origin_addr
-            if addr_diff != stride:
-                raise ValueError("mismatched storage ordering")
+    if not storage_order_match:
+        raise ValueError("mismatched storage ordering")
 
     hfill = None
 
@@ -185,7 +177,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         if isinstance(storage, bh.storage.Double):
             cppstoragetype = ROOT.narf.TensorAccumulator[tensor_type]
         elif isinstance(storage, bh.storage.Weight):
-            cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
+            cppstoragetype = ROOT.narf.tensor_weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
         else:
             raise TypeError("Requested storage type is not supported with tensor weights currently")
 
@@ -194,18 +186,18 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         if force_atomic:
             cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
 
-        print("storage type: ", cppstoragetype.__cpp_name__)
+        #print("storage type: ", cppstoragetype.__cpp_name__)
         hfill = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
 
         #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
 
         helper = ROOT.narf.FillBoostHelperAtomic[type(h), type(hfill)](ROOT.std.move(h), ROOT.std.move(hfill))
 
-        targs = tuple([type(df), type(helper)] + coltypes)
-        targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
-        targsstr = ",".join(targsnames)
-        ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(h).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
-        assert(0)
+        #targs = tuple([type(df), type(helper)] + coltypes)
+        #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
+        #targsstr = ",".join(targsnames)
+        #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(h).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+        #assert(0)
     else:
         helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
 
@@ -518,7 +510,7 @@ def _histo_with_boost(df, model, cols):
 
     if tensor_weight:
         tensor_type = coltypes[-1]
-        cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
+        cppstoragetype = ROOT.narf.tensor_weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
         cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
         boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*boost_axes)
     else:

@@ -100,31 +100,21 @@ def build_graph(df, dataset):
         #df = df.DefinePerSample("pdfidx", "std::array<int, 103> res; std::iota(res.begin(), res.end(), 0); return res;")
 
 
-        for i in range(1):
+        for i in range(10):
 
             wname = f"pdfweight_{i}"
 
             #df = df.Define(wname, "weight*LHEPdfWeight")
 
-            #df = df.Define(wname, "Eigen::TensorFixedSize<narf::atomic_adaptor<double>, Eigen::Sizes<103>> res; auto w = weight*LHEPdfWeight; std::copy(std::begin(w), std::end(w), &res[0]); return res;")
 
-
-            df = df.Define(wname, "Eigen::TensorFixedSize<double, Eigen::Sizes<103>> res; auto w = weight*LHEPdfWeight; std::copy(std::begin(w), std::end(w), &res[0]); return res;")
-
-            #df = df.Define(wname, "narf::VariationTensor<double, 103> res; auto w = weight*LHEPdfWeight; std::copy(std::begin(w), std::end(w), res.data()); return res;")
-
-            #df = df.Define(wname, "Eigen::Array<double, 103, 1> res; auto w = weight*LHEPdfWeight; std::copy(std::begin(w), std::end(w), std::begin(res)); return res;")
-
-
-            #df = df.Define(wname, "Eigen::TensorFixedSize<narf::atomic_adaptor<double>, Eigen::Sizes<10>> res; res.setZero(); return res;")
-            #df = df.Define(f"pdfweight_{i}", "Numba::weightsq(LHEPdfWeight)")
-
-            #wname = "LHEPdfWeight"
+            df = df.Define(wname, "Eigen::TensorFixedSize<double, Eigen::Sizes<103>> res; auto w = weight*LHEPdfWeight; std::copy(std::begin(w), std::end(w), res.data()); return res;")
 
             if args.useBoost:
                 #hptetachargepdf = df.HistoBoost(f"hptetachargepdf_{i}", [axis_pt, axis_eta, axis_charge, axis_pdf_idx], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", wname])
+                #hptetachargepdf = df.HistoBoost(f"hptetachargepdf_{i}", [axis_pt, axis_eta, axis_charge, axis_pdf_idx], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", wname], storage=hist.storage.Double())
                 #hptetachargepdf = df.HistoBoostArr(f"hptetachargepdf_{i}", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", wname])
                 hptetachargepdf = df.HistoBoost(f"hptetachargepdf_{i}", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", wname])
+                #hptetachargepdf = df.HistoBoost(f"hptetachargepdf_{i}", [axis_pt, axis_eta, axis_charge], ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", wname], storage=hist.storage.Double())
             else:
                 #hptetachargepdf = df.HistoND((f"hptetachargepdf_{i}", "", 4, [29, 48, 2, 103], [26., -2.4, -2., -0.5], [55., 2.4, 2., 102.5]), ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", f"pdfweight_{i}"])
                 #hptetachargepdf = df.HistoNDWithBoost((f"hptetachargepdf_{i}", "", 4, [29, 48, 2, 103], [26., -2.4, -2., -0.5], [55., 2.4, 2., 102.5]), ["goodMuons_Pt0", "goodMuons_Eta0", "goodMuons_Charge0", "pdfidx", wname])
