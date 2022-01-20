@@ -27,7 +27,7 @@ namespace narf {
   }
 
   template<typename Axis, typename... Axes>
-  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<accumulators::count<double, true>>>
+  histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, dense_storage<narf::atomic_adaptor<double>>>
   make_atomic_histogram(Axis&& axis, Axes&&... axes) {
     return make_histogram_with(dense_storage<narf::atomic_adaptor<double>>(), std::forward<Axis>(axis), std::forward<Axes>(axes)...);
   }
