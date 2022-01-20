@@ -149,7 +149,7 @@ namespace narf {
          // loop increments all of the iterators while leaving scalars unmodified
          // TODO this could be simplified with fold expressions or std::apply in C++17
          auto nop = [](auto &&...) {};
-         for (auto itst = std::forward_as_tuple(its...); GetNthElement<ColIdx>(its...) != end; nop(++its...)) {
+         for (auto itst = std::forward_as_tuple(its...); std::get<ColIdx>(itst) != end; nop(++its...)) {
             FillHistIt(itst, std::make_index_sequence<sizeof...(its)-1>{});
          }
       }
@@ -199,7 +199,7 @@ namespace narf {
 
       // no container arguments
       template <typename... ValTypes,
-               typename std::enable_if<!Disjunction<IsDataContainer<ValTypes>...>::value, int>::type = 0>
+               typename std::enable_if<!std::disjunction<IsDataContainer<ValTypes>...>::value, int>::type = 0>
       void Exec(unsigned int slot, const ValTypes &...x) {
          using namespace boost::histogram;
          constexpr unsigned int N = sizeof...(x);
@@ -213,7 +213,7 @@ namespace narf {
       }
 
       // at least one container argument
-      template <typename... Xs, typename std::enable_if<Disjunction<IsDataContainer<Xs>...>::value, int>::type = 0>
+      template <typename... Xs, typename std::enable_if<std::disjunction<IsDataContainer<Xs>...>::value, int>::type = 0>
       void Exec(unsigned int slot, const Xs &...xs)
       {
          // array of bools keeping track of which inputs are containers
@@ -225,7 +225,7 @@ namespace narf {
          static_assert(colidx < sizeof...(Xs), "Error: index of collection-type argument not found.");
 
          // get the end iterator to the first container
-         auto const xrefend = std::end(GetNthElement<colidx>(xs...));
+         auto const xrefend = std::end(std::get<colidx>(std::forward_as_tuple(xs...)));
 
          // array of container sizes (1 for scalars)
          std::array<std::size_t, sizeof...(xs)> sizes = {{GetSize(xs)...}};
