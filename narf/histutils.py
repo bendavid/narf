@@ -120,9 +120,9 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
                 var_axis_names = [f"var_axis_{i}" for i in range(traits.rank)]
             # weight is a tensor-type, use optimized storage and create additional axes
             # corresponding to tensor indices
-            for size, name in zip(traits.get_sizes(), var_axis_names):
+            for size, var_axis_name in zip(traits.get_sizes(), var_axis_names):
                 tensor_weight = True
-                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = name))
+                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = var_axis_name))
 
 
     _hist = hist.Hist(*python_axes, storage = storage)
