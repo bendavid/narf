@@ -248,11 +248,6 @@ namespace narf {
 
          constexpr bool is_weighted_sum = acc_trait::is_weighted_sum;
 
-//          std::cout << "is_weighted_sum = " << is_weighted_sum << std::endl;
-//          std::cout << TClass::GetClass<acc_t>()->GetName() << std::endl;
-
-         using tensor_trait = narf::tensor_traits<typename acc_trait::value_type>;
-
          constexpr bool isTH1 = std::is_base_of<TH1, HIST>::value;
          constexpr bool isTHn = std::is_base_of<THnBase, HIST>::value;
 
@@ -262,12 +257,12 @@ namespace narf {
                fObject->Sumw2();
             }
 
-            if constexpr(tensor_trait::is_tensor) {
+            if constexpr(acc_trait::is_tensor) {
 
 //
 //                std::cout << "tensor conversion" << std::endl;
 
-               auto constexpr tensor_rank = tensor_trait::rank;
+               auto constexpr tensor_rank = acc_t::rank;
                const auto fillrank = fFillObject->rank();
 
                const auto rank = fillrank + tensor_rank;
@@ -298,16 +293,14 @@ namespace narf {
                      continue;
                   }
                   auto const &acc_val = fFillObject->at(boost_idxs);
+                  auto const &val = std::apply(acc_val.data(), tensor_idxs);
 
                   if constexpr (is_weighted_sum) {
-                     auto const &value = std::apply(acc_val.value(), tensor_idxs);
-                     auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
-
-                     fObject->SetBinContent(ibin, value);
-                     narf::set_bin_error2(*fObject, ibin, variance);
+                     fObject->SetBinContent(ibin, val.value());
+                     narf::set_bin_error2(*fObject, ibin, val.variance());
                   }
                   else {
-                     fObject->SetBinContent(ibin, acc_val);
+                     fObject->SetBinContent(ibin, val);
                   }
                }
             }
@@ -356,8 +349,8 @@ namespace narf {
                const auto rank = fObject->rank();
                const auto fillrank = fFillObject->rank();
 
-               if constexpr (tensor_trait::is_tensor) {
-                  auto constexpr tensor_rank = tensor_trait::rank;
+               if constexpr (acc_trait::is_tensor) {
+                  auto constexpr tensor_rank = acc_t::rank;
 
                   std::vector<int> idxs(fillrank, 0);
                   std::array<std::ptrdiff_t, tensor_rank> tensor_idxs;
@@ -377,15 +370,7 @@ namespace narf {
                         continue;
                      }
                      auto const &acc_val = fFillObject->at(idxs);
-                     if constexpr (is_weighted_sum) {
-                        auto const &value = std::apply(acc_val.value(), tensor_idxs);
-                        auto const &variance = std::apply(acc_val.variance(), tensor_idxs);
-//                         *x = std::decay_t<decltype(*x)>(value, variance);
-                        *x = { value, variance };
-                     }
-                     else {
-                        *x = std::apply(acc_val, tensor_idxs);
-                     }
+                     *x = std::apply(acc_val.data(), tensor_idxs);
                   }
                }
                else {
@@ -395,12 +380,7 @@ namespace narf {
                         idxs[idim] = x.index(idim);
                      }
                      auto const &acc_val = fFillObject->at(idxs);
-                     if constexpr (is_weighted_sum) {
-                        *x = { acc_val.value(), acc_val.variance() };
-                     }
-                     else {
-                        *x = acc_val;
-                     }
+                     *x = acc_val;
                   }
                }
             }

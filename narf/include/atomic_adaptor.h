@@ -63,6 +63,8 @@ public:
   atomic_adaptor() = default;
   atomic_adaptor(const T& o) noexcept : atomic_adaptor_base<T>{o} {}
 
+  // TODO cleanup and streamline use of SFINAE here
+
   // only enable if ++ operator is available for T
   template <typename U = T, typename E = void_t<decltype(++std::declval<U&>())>>
   atomic_adaptor& operator++() noexcept {
@@ -97,16 +99,6 @@ public:
   atomic_adaptor& operator*=(U&& x) noexcept {
     auto modifier = [](T &t, auto &&u) {
       t *= std::forward<U>(u);
-    };
-    this->modify(modifier, std::forward<U>(x));
-    return *this;
-  }
-
-  // only enable if /= operator is available for T with corresponding argument type
-  template <typename U, typename E = void_t<decltype(std::declval<T&>() /= std::forward<U>(std::declval<U>()))>>
-  atomic_adaptor& operator/=(U&& x) noexcept {
-    auto modifier = [](T &t, auto &&u) {
-      t /= std::forward<U>(u);
     };
     this->modify(modifier, std::forward<U>(x));
     return *this;
@@ -189,42 +181,6 @@ template <typename T>
 struct acc_traits<atomic_adaptor<T>> : public acc_traits<T> {
 };
 
-// specialization for tensor case, to move the atomic wrapper inside the tensor (ie atomicity applies
-// only element by element)
-
-template <typename T, typename Dimensions_, int Options_, typename IndexType>
-struct atomic_adaptor<TensorAccumulator<Eigen::TensorFixedSize<T, Dimensions_, Options_, IndexType>>> : public TensorAccumulator<Eigen::TensorFixedSize<atomic_adaptor<T>, Dimensions_, Options_, IndexType>> {
-
-private:
-  using base_t = TensorAccumulator<Eigen::TensorFixedSize<atomic_adaptor<T>, Dimensions_, Options_, IndexType>>;
-  using Tensor_t = Eigen::TensorFixedSize<T, Dimensions_, Options_, IndexType>;
-
-public:
-
-  // constructors from base class
-  using base_t::base_t;
-
-  // re-implement += operator because Eigen implementation uses lhs = lhs + rhs and
-  // does not preserve atomicity
-  atomic_adaptor &operator+=(const Tensor_t &rhs) {
-    const T *itr = rhs.data();
-    for (typename base_t::Scalar *it = base_t::data(); it != base_t::data() + base_t::size(); ++it, ++itr) {
-      (*it) += *itr;
-    }
-    return *this;
-  }
-
-  // avoid unnecessary conversion to atomic and back by taking a weight of the
-  // underlying type directly
-  template <typename U>
-  atomic_adaptor &operator+=(const boost::histogram::weight_type<U> &w) {
-    operator+=(w.value);
-    return *this;
-  }
-
-  static constexpr bool thread_safe() noexcept { return true; }
-};
-
 // specializations for weighted_sum exploiting the fact that value and variance
 // can be incremented independently
 // n.b. this leads to slightly weaker atomicity guarantees, in that a
@@ -233,8 +189,14 @@ public:
 // after modification, or vice-versa)
 template <typename T>
 struct atomic_adaptor<boost::histogram::accumulators::weighted_sum<T>> : public boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>> {
+
+private:
+  using base_t = boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>>;
+
+public:
+
   // constructors from base class
-  using boost::histogram::accumulators::weighted_sum<atomic_adaptor<T>>::weighted_sum;
+  using base_t::base_t;
 
   // avoid unnecessary conversion to atomic and back by taking a weight of the
   // underlying type directly
@@ -249,27 +211,19 @@ struct atomic_adaptor<boost::histogram::accumulators::weighted_sum<T>> : public 
   static constexpr bool thread_safe() noexcept { return true; }
 };
 
+// specialization for tensor case, to move the atomic wrapper inside the tensor (ie atomicity applies
+// only element by element)
 
-template <typename T>
-struct atomic_adaptor<tensor_weighted_sum<T>> : public tensor_weighted_sum<atomic_adaptor<T>> {
+template <typename T, typename Dimensions_>
+struct atomic_adaptor<tensor_accumulator<T, Dimensions_>> : public tensor_accumulator<atomic_adaptor<T>, Dimensions_> {
 
 private:
-  using base_t = tensor_weighted_sum<atomic_adaptor<T>>;
+  using base_t = tensor_accumulator<atomic_adaptor<T>, Dimensions_>;
 
 public:
+
   // constructors from base class
   using base_t::base_t;
-
-  // avoid unnecessary conversion to atomic and back by taking a weight of the
-  // underlying type directly
-  template <typename U>
-  atomic_adaptor &operator+=(const boost::histogram::weight_type<U> &w) {
-    // FIXME boost::histogram::weighted_sum data members should be protected
-    // rather than private to avoid the need for const_cast here
-    const_cast<atomic_adaptor<T>&>(this->value()) += w.value;
-    const_cast<atomic_adaptor<T>&>(this->variance()) += w.value*w.value;
-    return *this;
-  }
 
   static constexpr bool thread_safe() noexcept { return true; }
 };
@@ -281,10 +235,10 @@ namespace boost {
 namespace histogram {
 namespace detail {
 
-// pass-through type traits to underlying type
+// pass-through accumulator traits to underlying type
 template <class T>
-auto accumulator_traits_impl(narf::atomic_adaptor<T>&, priority<2>)
-  -> decltype(accumulator_traits_impl_call_op(&T::operator()));
+auto accumulator_traits_impl(narf::atomic_adaptor<T>&, priority<2>) ->  decltype(accumulator_traits_impl(std::declval<T&>(), priority<2>{}));
+
 
 }
 

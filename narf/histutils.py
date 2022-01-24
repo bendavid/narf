@@ -153,7 +153,6 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if strides != stridesf:
         raise ValueError("memory is not a contiguous fortran-style array as required by the C++ class")
 
-    #cppaxes = [convert_axis(axis) for axis in axes]
     cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
     cppstoragetype = convert_storage_type(storage, force_atomic = force_atomic and not tensor_weight)
 
@@ -173,11 +172,13 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if tensor_weight:
         # weight is a tensor type, using tensor-storage directly
         tensor_type = coltypes[-1]
+        # convert from string to cppyy type
+        tensor_type = ROOT.narf.type_identity[tensor_type].type
 
         if isinstance(storage, bh.storage.Double):
-            cppstoragetype = ROOT.narf.TensorAccumulator[tensor_type]
+            cppstoragetype = ROOT.narf.tensor_accumulator[tensor_type.Scalar, tensor_type.Dimensions]
         elif isinstance(storage, bh.storage.Weight):
-            cppstoragetype = ROOT.narf.tensor_weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
+            cppstoragetype = ROOT.narf.tensor_accumulator[ROOT.boost.histogram.accumulators.weighted_sum[tensor_type.Scalar], tensor_type.Dimensions]
         else:
             raise TypeError("Requested storage type is not supported with tensor weights currently")
 
@@ -510,8 +511,11 @@ def _histo_with_boost(df, model, cols):
 
     if tensor_weight:
         tensor_type = coltypes[-1]
-        cppstoragetype = ROOT.narf.tensor_weighted_sum[ROOT.narf.TensorAccumulator[tensor_type]]
-        cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
+        # convert from string to cppyy type
+        tensor_type = ROOT.narf.type_identity[tensor_type].type
+        cppstoragetype = ROOT.narf.tensor_accumulator[ROOT.boost.histogram.accumulators.weighted_sum[tensor_type.Scalar], tensor_type.Dimensions]
+        if ROOT.ROOT.IsImplicitMTEnabled():
+            cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
         boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*boost_axes)
     else:
         boost_hist = ROOT.narf.make_atomic_histogram_with_error(*boost_axes)

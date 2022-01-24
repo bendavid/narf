@@ -12,13 +12,15 @@ namespace narf {
 template <typename T>
 struct acc_traits {
   static constexpr bool is_weighted_sum = false;
-  using value_type = T;
+  static constexpr bool is_tensor = false;
+//   using value_type = T;
 };
 
 template <typename T>
 struct acc_traits<boost::histogram::accumulators::weighted_sum<T>> {
   static constexpr bool is_weighted_sum = true;
-  using value_type = T;
+  static constexpr bool is_tensor = false;
+//   using value_type = T;
 };
 
 template <typename T, typename Enable = void>
@@ -44,6 +46,19 @@ template <typename T>
 struct tensor_traits<T, std::enable_if_t<ROOT::Internal::RDF::IsDataContainer<T>::value>> : public tensor_traits<typename T::value_type> {
   static constexpr bool is_container = true;
 };
+
+#if __cplusplus < 202002L
+template< class T >
+struct type_identity {
+    using type = T;
+};
+#else
+template< class T >
+using type_identity = std::type_identity<T>;
+#endif
+
+template< class T >
+using type_identity_t = typename type_identity<T>::type;
 
 }
 
