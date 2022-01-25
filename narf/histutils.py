@@ -328,7 +328,6 @@ def hist_to_root(boost_hist):
         edges = []
         for axis in boost_hist.axes:
             if isinstance(axis, bh.axis.Regular) or isinstance(axis, bh.axis.Variable):
-                #TODO add transform support
                 nbins.append(axis.size)
                 edges.append(axis.edges)
             elif isinstance(axis, bh.axis.Integer):
@@ -355,7 +354,6 @@ def hist_to_root(boost_hist):
         xhighs = []
         for axis in boost_hist.axes:
             if isinstance(axis, bh.axis.Regular):
-                #TODO add transform support
                 if axis.transform is not None:
                     raise ValueError("transforms are not supported (should never reach here)")
 
