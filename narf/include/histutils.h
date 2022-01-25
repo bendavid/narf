@@ -64,9 +64,9 @@ namespace narf {
 
   template<typename T, typename A, typename... Axes>
   histogram<std::tuple<std::decay_t<Axes>...>, adopted_storage<T>>
-  make_histogram_adopted(A addr, std::size_t buf_size, Axes&&... axes) {
+  make_histogram_adopted(bool do_init, A addr, std::size_t buf_size, Axes&&... axes) {
     void *buffer = reinterpret_cast<void*>(addr);
-    adopted_storage<T> storage(buffer, buf_size);
+    adopted_storage<T> storage(do_init, buffer, buf_size);
     auto h = make_histogram_with(std::move(storage), std::forward<Axes>(axes)...);
 
     if (h.size()*sizeof(T) != buf_size) {

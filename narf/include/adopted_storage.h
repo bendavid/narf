@@ -14,25 +14,33 @@ namespace narf {
     using iterator = T*;
     using const_iterator = const T*;
 
-    adopted_storage(void *buffer, std::size_t buffer_size) :
+    adopted_storage(bool do_init, void *buffer, std::size_t buffer_size) :
+        do_init_(do_init),
         buffer_size_(buffer_size),
         data_(static_cast<T*>(std::align(alignof(T), sizeof(T), buffer, buffer_size_))) {
       // adopting memory in this way is only safe if the relevant classes have standard layout
       static_assert(std::is_standard_layout<T>::value);
       // the destructor will never be called
       static_assert(std::is_trivially_destructible<T>::value);
+
+      // initialization is required if the type is not trivially copyable
+      if (!do_init_ && !std::is_trivially_copy_constructible<T>::value) {
+        throw std::runtime_error("cannot skip initialization for non-trivially copyable type");
+      }
     }
 
     void reset(std::size_t n) {
-      if (n > initialized_size_) {
-        if (n > max_size()) {
-          throw std::runtime_error("requested size too large");
-        }
-        data_ = new (data_) T[n]();
-        initialized_size_ = n;
+      if (n > max_size()) {
+        throw std::runtime_error("requested size too large");
       }
-      else {
-        std::fill_n(data_, n, T());
+      if (do_init_) {
+        if (n > initialized_size_) {
+          data_ = new (data_) T[n]();
+          initialized_size_ = n;
+        }
+        else {
+          std::fill_n(data_, n, T());
+        }
       }
       size_ = n;
     }
@@ -66,6 +74,8 @@ namespace narf {
   private:
 
     std::size_t max_size() const noexcept { return buffer_size_/sizeof(T); }
+
+    bool do_init_;
 
     std::size_t size_{};
     std::size_t initialized_size_{};

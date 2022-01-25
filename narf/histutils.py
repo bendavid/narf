@@ -64,33 +64,35 @@ def convert_axis(axis):
     else:
         raise TypeError("axis must be a boost_histogram or compatible axis")
 
-def convert_storage_type(storage, force_atomic = False):
-    if isinstance(storage, bh.storage.Double):
+def convert_storage_type(storage_type, force_atomic = False):
+    #TODO move from strings to cppyy syntax and simplify handling of atomic
+
+    if issubclass(storage_type, bh.storage.Double):
         if force_atomic:
             return "narf::atomic_adaptor<double>"
         else:
             return "double"
-    elif isinstance(storage, bh.storage.Unlimited):
+    elif issubclass(storage_type, bh.storage.Unlimited):
         raise TypeError("Unlimited storage not supported")
-    elif isinstance(storage, bh.storage.Int64):
+    elif issubclass(storage_type, bh.storage.Int64):
         if force_atomic:
             return "narf::atomic_adaptor<std::int64_t>"
         else:
             return "std::int64_t"
-    elif isinstance(storage, bh.storage.AtomicInt64):
+    elif issubclass(storage_type, bh.storage.AtomicInt64):
         return "boost::histogram::accumulators::count<std::int64_t, true>"
-    elif isinstance(storage, bh.storage.Weight):
+    elif issubclass(storage_type, bh.storage.Weight):
         if force_atomic:
             #return "boost::histogram::accumulators::weighted_sum<narf::atomic_adaptor<double>>"
             return "narf::atomic_adaptor<boost::histogram::accumulators::weighted_sum<double>>"
         else:
             return "boost::histogram::accumulators::weighted_sum<double>"
-    elif isinstance(storage, bh.storage.Mean):
+    elif issubclass(storage_type, bh.storage.Mean):
         if force_atomic:
             return "narf::atomic_adaptor<boost::histogram::accumulators::mean<double>>"
         else:
             return "boost::histogram::accumulators::mean<double>"
-    elif isinstance(storage, bh.storage.WeightedMean):
+    elif issubclass(storage_type, bh.storage.WeightedMean):
         if force_atomic:
             return "narf::atomic_adaptor<boost::histogram::accumulators::weighted_mean<double>>"
         else:
@@ -98,36 +100,9 @@ def convert_storage_type(storage, force_atomic = False):
     else:
         raise TypeError("storage must be a boost_histogram or compatible storage type")
 
-def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled(), var_axis_names = None):
-    # first construct a histogram from the hist python interface, then construct a boost histogram
-    # using PyROOT with compatible axes and storage types, adopting the underlying storage
-    # of the python hist histogram
+def make_pyroot_view(hist_hist, force_atomic = False, do_init = False):
 
-    #storage = bh.storage.Mean()
-
-    #TODO this code can be shared with root histogram version
-
-    coltypes = [df.GetColumnType(col) for col in cols]
-
-    has_weight = len(cols) == (len(axes) + 1)
-    tensor_weight = False
-    python_axes = axes.copy()
-
-    if has_weight:
-        traits = ROOT.narf.tensor_traits[coltypes[-1]]
-        if traits.is_tensor:
-            if var_axis_names is None:
-                var_axis_names = [f"var_axis_{i}" for i in range(traits.rank)]
-            # weight is a tensor-type, use optimized storage and create additional axes
-            # corresponding to tensor indices
-            for size, var_axis_name in zip(traits.get_sizes(), var_axis_names):
-                tensor_weight = True
-                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = var_axis_name))
-
-
-    _hist = hist.Hist(*python_axes, storage = storage)
-
-    arr = _hist.view(flow = True).__array_interface__
+    arr = hist_hist.view(flow = True).__array_interface__
 
     addr = arr["data"][0]
     shape = arr["shape"]
@@ -153,19 +128,46 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if strides != stridesf:
         raise ValueError("memory is not a contiguous fortran-style array as required by the C++ class")
 
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
-    cppstoragetype = convert_storage_type(storage, force_atomic = force_atomic and not tensor_weight)
+    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in hist_hist.axes]
+    cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
 
-    h = ROOT.narf.make_histogram_adopted[cppstoragetype](addr, size_bytes, *cppaxes)
-
-    #bufptr = cppyy.ll.reinterpret_cast["void*"](addr)
-    #storage = ROOT.narf.adopted_storage[cppstoragetype](bufptr, size_bytes)
-    #h = ROOT.narf.make_histogram_with_storage(ROOT.std.move(storage), *cppaxes)
+    h = ROOT.narf.make_histogram_adopted[cppstoragetype](do_init, addr, size_bytes, *cppaxes)
 
     storage_order_match = ROOT.narf.check_storage_order(h, strides)
 
     if not storage_order_match:
         raise ValueError("mismatched storage ordering")
+
+    return h
+
+def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled(), var_axis_names = None):
+    # first construct a histogram from the hist python interface, then construct a boost histogram
+    # using PyROOT with compatible axes and storage types, adopting the underlying storage
+    # of the python hist histogram
+
+    #TODO this code can be shared with root histogram version
+
+    coltypes = [df.GetColumnType(col) for col in cols]
+
+    has_weight = len(cols) == (len(axes) + 1)
+    tensor_weight = False
+    python_axes = axes.copy()
+
+    if has_weight:
+        traits = ROOT.narf.tensor_traits[coltypes[-1]]
+        if traits.is_tensor:
+            if var_axis_names is None:
+                var_axis_names = [f"var_axis_{i}" for i in range(traits.rank)]
+            # weight is a tensor-type, use optimized storage and create additional axes
+            # corresponding to tensor indices
+            for size, var_axis_name in zip(traits.get_sizes(), var_axis_names):
+                tensor_weight = True
+                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = var_axis_name))
+
+
+    _hist = hist.Hist(*python_axes, storage = storage)
+
+    h = make_pyroot_view(_hist, force_atomic = force_atomic and not tensor_weight, do_init = True)
 
     hfill = None
 
