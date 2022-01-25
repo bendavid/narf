@@ -514,12 +514,13 @@ def _histo_with_boost(df, model, cols):
         # convert from string to cppyy type
         tensor_type = ROOT.narf.type_identity[tensor_type].type
         cppstoragetype = ROOT.narf.tensor_accumulator[ROOT.boost.histogram.accumulators.weighted_sum[tensor_type.Scalar], tensor_type.Dimensions]
-        if ROOT.ROOT.IsImplicitMTEnabled():
-            cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
-        boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*boost_axes)
     else:
-        boost_hist = ROOT.narf.make_atomic_histogram_with_error(*boost_axes)
+        cppstoragetype = ROOT.boost.histogram.accumulators.weighted_sum[ROOT.double]
 
+    if ROOT.ROOT.IsImplicitMTEnabled():
+        cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
+
+    boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*boost_axes)
 
     helper = ROOT.narf.FillBoostHelperAtomic[hist_type, type(boost_hist)](model, ROOT.std.move(boost_hist))
 
