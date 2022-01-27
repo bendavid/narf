@@ -35,11 +35,14 @@ namespace narf {
       }
       if (do_init_) {
         if (n > initialized_size_) {
-          data_ = new (data_) T[n]();
+          std::fill_n(data_, initialized_size_, T{});
+          for (T *it = data_ + initialized_size_; it != data_ + n; ++it) {
+            new (it) T{};
+          }
           initialized_size_ = n;
         }
         else {
-          std::fill_n(data_, n, T());
+          std::fill_n(data_, n, T{});
         }
       }
       size_ = n;
