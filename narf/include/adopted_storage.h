@@ -17,7 +17,7 @@ namespace narf {
     adopted_storage(bool do_init, void *buffer, std::size_t buffer_size) :
         do_init_(do_init),
         buffer_size_(buffer_size),
-        data_(static_cast<T*>(std::align(alignof(T), sizeof(T), buffer, buffer_size_))) {
+        data_(static_cast<T*>(::operator new[](buffer_size_, std::align(alignof(T), sizeof(T), buffer, buffer_size_)))) {
       // adopting memory in this way is only safe if the relevant classes have standard layout
       static_assert(std::is_standard_layout<T>::value);
       // the destructor will never be called
