@@ -14,10 +14,17 @@ namespace narf {
     using iterator = T*;
     using const_iterator = const T*;
 
+    // TODO current storage scheme minimizes the use of std::launder but leads to unnecessary default constructor calls in
+    // some cases when resizing.  Further optimizing this probably requires writing a dedicated iterator class.
+    
     adopted_storage(bool do_init, void *buffer, std::size_t buffer_size) :
         do_init_(do_init),
         buffer_size_(buffer_size),
-        data_(static_cast<T*>(::operator new[](buffer_size_, std::align(alignof(T), sizeof(T), buffer, buffer_size_)))) {
+        buffer_(std::align(alignof(T), 0, buffer, buffer_size_)),
+        // TODO storing data_ pointer here is redundant, but maybe(?) needed for placement new in reset()
+        // using an intermediate array of (uninitialized) bytes should satisfy the requirements for implicit object creation
+        // of the array of T for the no-initialization case
+        data_(do_init_ ? new (buffer_) T[0]() : std::launder(reinterpret_cast<T*>(new (buffer_) std::byte[buffer_size_]))) {
       // adopting memory in this way is only safe if the relevant classes have standard layout
       static_assert(std::is_standard_layout<T>::value);
       // the destructor will never be called
@@ -35,14 +42,11 @@ namespace narf {
       }
       if (do_init_) {
         if (n > initialized_size_) {
-          std::fill_n(data_, initialized_size_, T{});
-          for (T *it = data_ + initialized_size_; it != data_ + n; ++it) {
-            new (it) T{};
-          }
+          data_ = new (buffer_) T[n]();
           initialized_size_ = n;
         }
         else {
-          std::fill_n(data_, n, T{});
+          std::fill_n(data_, n, T());
         }
       }
       size_ = n;
@@ -84,6 +88,8 @@ namespace narf {
     std::size_t initialized_size_{};
 
     std::size_t buffer_size_;
+    void *buffer_;
+    
     T *data_;
   };
 
