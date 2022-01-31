@@ -40,6 +40,11 @@ namespace narf {
   template< class T >
   inline constexpr bool is_implicit_lifetime_v = is_implicit_lifetime<T>::value;
 
+  // class which temporarily reinterprets an object as a different type without making a copy.
+  // Depending on which constructor is used, the object representation of the initial object
+  // is initially preserved, or replaced by initialization of a new object.
+  // Object representation is always preserved when the view is destructed
+
   //TODO check alignment?
   // we could think to check for standard layout here, but bit_cast doesn't do it, so we leave that out for consistency
 
@@ -122,6 +127,12 @@ namespace narf {
 
     T *data_;
   };
+
+  // class which temporarily reinterprets an object as an array of objects,
+  // possibly of different type without making a copy.
+  // Depending on which constructor is used, the object representation of the initial object
+  // is initially preserved, or replaced by initialization of a new array and its members.
+  // Object representation is always preserved when the array_view is destructed
 
   // TODO in c++ 20 and later inherit from std::span?
   // TODO in c++ 20 and later take span as argument instead of pointer and size
