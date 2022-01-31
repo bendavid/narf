@@ -240,10 +240,9 @@ namespace narf {
       }
 
       void Finalize() {
-         // this should work but doesn't because boost::histogram::storage_adapter doesn't
-         // pass it through properly, so use decltype below instead
-//          using acc_t = typename HISTFILL::Storage::value_type;
-         using acc_t = std::decay_t<decltype(*fFillObject->begin())>;
+         using acc_t = typename HISTFILL::storage_type::value_type;
+//          using acc_t = std::decay_t<decltype(*fFillObject->begin())>;
+//          static_assert(std::is_same_v<acc_t, typename HISTFILL::storage_type::value_type>);
          using acc_trait = narf::acc_traits<acc_t>;
 
          constexpr bool is_weighted_sum = acc_trait::is_weighted_sum;
@@ -383,6 +382,11 @@ namespace narf {
                      *x = acc_val;
                   }
                }
+            }
+
+            if constexpr (storage_traits<typename HIST::storage_type>::is_adopted) {
+              // adopted storage, clear the histogram so that storage is released
+              fObject.reset();
             }
          }
 

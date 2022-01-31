@@ -108,6 +108,7 @@ def make_pyroot_view(hist_hist, force_atomic = False, do_init = False):
     shape = arr["shape"]
     elem_size = int(arr["typestr"][2:])
     strides = arr["strides"]
+    buf = cppyy.ll.reinterpret_cast["void*"](addr)
 
     size = math.prod(shape)
     size_bytes = size*elem_size
@@ -131,7 +132,7 @@ def make_pyroot_view(hist_hist, force_atomic = False, do_init = False):
     cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in hist_hist.axes]
     cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
 
-    h = ROOT.narf.make_histogram_adopted[cppstoragetype](do_init, addr, size_bytes, *cppaxes)
+    h = ROOT.narf.make_histogram_adopted[cppstoragetype, bool_to_string(do_init)](buf, size_bytes, *cppaxes)
 
     storage_order_match = ROOT.narf.check_storage_order(h, strides)
 
@@ -202,6 +203,8 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(h).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
         #assert(0)
     else:
+        #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}>;")
+
         helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
 
     targs = tuple([type(df), type(helper)] + coltypes)
@@ -212,14 +215,14 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     # hide underlying C++ class and return the python version instead
 
-    res._GetValue = res.GetValue
+    res._GetPtr = res.GetPtr
 
     def get_hist():
-        res._GetValue()
+        res._GetPtr()
         return res._hist
 
     def hist_getitem(*args, **kwargs):
-        res._GetValue()
+        res._GetPtr()
         return res._hist.__getitem__(*args, **kwargs)
 
     ret_null = lambda : None

@@ -23,6 +23,11 @@ struct acc_traits<boost::histogram::accumulators::weighted_sum<T>> {
 //   using value_type = T;
 };
 
+template <typename T>
+struct storage_traits {
+  static constexpr bool is_adopted = false;
+};
+
 template <typename T, typename Enable = void>
 struct tensor_traits {
   static constexpr bool is_container = false;
