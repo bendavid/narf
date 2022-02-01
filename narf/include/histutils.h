@@ -149,9 +149,11 @@ namespace narf {
         }
       }
 
-      *view<val_t>(valbytes + offsetval, sizeof(val_t)) = hist.GetBinContent(ibin);
+      const val_t &val = hist.GetBinContent(ibin);
+      std::memcpy(valbytes + offsetval, &val, sizeof(val_t));
       if (vars != nullptr) {
-        *view<var_t>(varbytes + offsetvar, sizeof(var_t)) = get_bin_error2(hist, ibin);
+        const var_t &var = get_bin_error2(hist, ibin);
+        std::memcpy(varbytes + offsetvar, &var, sizeof(var_t));
       }
     }
   }
@@ -178,9 +180,13 @@ namespace narf {
         }
       }
 
-      hist.SetBinContent(ibin, bit_cast_ptr<val_t>(valbytes + offsetval));
+      val_t val;
+      std::memcpy(&val, valbytes + offsetval, sizeof(val_t));
+      hist.SetBinContent(ibin, val);
       if (vars != nullptr) {
-        set_bin_error2(hist, ibin, bit_cast_ptr<var_t>(varbytes + offsetval));
+        var_t var;
+        std::memcpy(&var, varbytes + offsetvar, sizeof(var_t));
+        set_bin_error2(hist, ibin, var);
       }
     }
   }
