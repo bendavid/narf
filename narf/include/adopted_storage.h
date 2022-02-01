@@ -34,7 +34,7 @@ namespace narf {
         // array_view initialization
         if constexpr (do_init) {
           // elements are already default initialized in this case
-          data_ = array_view<T>(bytes_, size_bytes_, in_place);
+          data_ = array_view<T>(bytes_, size_bytes_, std::in_place);
         }
         else {
           // special case, re-use the existing values
