@@ -156,7 +156,7 @@ namespace narf {
     view(U &from) : data_(start_lifetime_as<T>(&from)) {}
 
     template <typename U,
-              typename std::enable_if_t<is_implicit_lifetime_v<U> && std::is_trivially_copyable_v<U>
+              typename = std::enable_if_t<is_implicit_lifetime_v<U> && std::is_trivially_copyable_v<U>
                     && is_implicit_lifetime_v<T> && std::is_trivially_copyable_v<T>
                     && sizeof(T) % sizeof(U) == 0>>
     view(U *from, std::size_t /*from_size*/) : data_(start_lifetime_as<T>(from)) {
