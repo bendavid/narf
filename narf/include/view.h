@@ -58,11 +58,9 @@ namespace narf {
       // logic is directly equivalent except the implicitly created object is an array of T
       // and its elements
 #ifdef __clang__
-      std::cout << "clang path\n";
       std::memmove(p, p, size*sizeof(T));
       return std::launder(static_cast<T*>(p));
 #else
-      std::cout << "gcc path\n";
       std::memmove(p, p, size*sizeof(T));
       std::byte *b = std::launder(static_cast<std::byte*>(p));
       std::memmove(p, b, size*sizeof(T));
