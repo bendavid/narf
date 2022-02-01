@@ -301,7 +301,7 @@ def root_to_hist(root_hist):
 
     vals = boost_hist.values(flow = True)
     valsaddr = vals.__array_interface__["data"][0]
-    valsarr = cppyy.ll.reinterpret_cast["double*"](valsaddr)
+    valsarr = cppyy.ll.reinterpret_cast["void*"](valsaddr)
     valsstrides = vals.__array_interface__["strides"]
 
     variances = boost_hist.variances(flow = True)
@@ -310,9 +310,8 @@ def root_to_hist(root_hist):
         varsarr = cppyy.nullptr
         varsstrides = valsstrides
     else:
-        varsarr = cppyy.ll.reinterpret_cast["double*"](varsaddr)
+        varsarr = cppyy.ll.reinterpret_cast["void*"](varsaddr)
         varsstrides = variances.__array_interface__["strides"]
-        root_hist.Sumw2()
 
     ROOT.narf.fill_boost(root_hist, valsarr, varsarr, valsstrides, varsstrides)
 
@@ -397,7 +396,7 @@ def hist_to_root(boost_hist):
 
     vals = boost_hist.values(flow = True)
     valsaddr = vals.__array_interface__["data"][0]
-    valsarr = cppyy.ll.reinterpret_cast["double*"](valsaddr)
+    valsarr = cppyy.ll.reinterpret_cast["void*"](valsaddr)
     valsstrides = vals.__array_interface__["strides"]
 
     variances = boost_hist.variances(flow = True)
@@ -406,7 +405,7 @@ def hist_to_root(boost_hist):
         varsarr = cppyy.nullptr
         varsstrides = valsstrides
     else:
-        varsarr = cppyy.ll.reinterpret_cast["double*"](varsaddr)
+        varsarr = cppyy.ll.reinterpret_cast["void*"](varsaddr)
         varsstrides = variances.__array_interface__["strides"]
         root_hist.Sumw2()
 

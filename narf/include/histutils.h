@@ -127,21 +127,12 @@ namespace narf {
     hist.SetBinError2(ibin, var);
   }
 
-  template <typename HIST>
-  void fill_boost(const HIST &hist, double* vals, double *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
-//     double *vals = reinterpret_cast<double*>(addrvals);
-//     double *vars = reinterpret_cast<double*>(addrvars);
+  template <typename HIST, typename val_t = double, typename var_t = val_t>
+  void fill_boost(const HIST &hist, void* vals, void *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
+    std::byte *valbytes = static_cast<std::byte*>(vals);
+    std::byte *varbytes = static_cast<std::byte*>(vars);
 
     const auto rank = stridevals.size();
-
-    std::vector<std::size_t> stridevalsarr(rank);
-    std::vector<std::size_t> stridevarsarr(rank);
-    for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-      stridevalsarr[iaxis] = stridevals[iaxis]/sizeof(double);
-      if (vars != nullptr) {
-        stridevarsarr[iaxis] = stridevars[iaxis]/sizeof(double);
-      }
-    }
 
     // has to be at least 3 for TH1 case
     std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
@@ -152,34 +143,25 @@ namespace narf {
       std::size_t offsetval = 0;
       std::size_t offsetvar = 0;
       for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-        offsetval += stridevalsarr[iaxis]*idxs[iaxis];
+        offsetval += stridevals[iaxis]*idxs[iaxis];
         if (vars != nullptr) {
-          offsetvar += stridevarsarr[iaxis]*idxs[iaxis];
+          offsetvar += stridevars[iaxis]*idxs[iaxis];
         }
       }
 
-      vals[offsetval] = hist.GetBinContent(ibin);
+      *view<val_t>(valbytes + offsetval, sizeof(val_t)) = hist.GetBinContent(ibin);
       if (vars != nullptr) {
-        vars[offsetvar] = get_bin_error2(hist, ibin);
+        *view<var_t>(varbytes + offsetvar, sizeof(var_t)) = get_bin_error2(hist, ibin);
       }
     }
   }
 
-  template <typename HIST>
-  void fill_root(HIST &hist, double* vals, double *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
-//     double *vals = reinterpret_cast<double*>(addrvals);
-//     double *vars = reinterpret_cast<double*>(addrvars);
+  template <typename HIST, typename val_t = double, typename var_t = val_t>
+  void fill_root(HIST &hist, const void* vals, const void *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
+    const std::byte *valbytes = static_cast<const std::byte*>(vals);
+    const std::byte *varbytes = static_cast<const std::byte*>(vars);
 
     const auto rank = stridevals.size();
-
-    std::vector<std::size_t> stridevalsarr(rank);
-    std::vector<std::size_t> stridevarsarr(rank);
-    for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-      stridevalsarr[iaxis] = stridevals[iaxis]/sizeof(double);
-      if (vars != nullptr) {
-        stridevarsarr[iaxis] = stridevars[iaxis]/sizeof(double);
-      }
-    }
 
     // has to be at least 3 for TH1 case
     std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
@@ -190,15 +172,15 @@ namespace narf {
       std::size_t offsetval = 0;
       std::size_t offsetvar = 0;
       for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-        offsetval += stridevalsarr[iaxis]*idxs[iaxis];
+        offsetval += stridevals[iaxis]*idxs[iaxis];
         if (vars != nullptr) {
-          offsetvar += stridevarsarr[iaxis]*idxs[iaxis];
+          offsetvar += stridevars[iaxis]*idxs[iaxis];
         }
       }
 
-      hist.SetBinContent(ibin, vals[offsetval]);
+      hist.SetBinContent(ibin, bit_cast_ptr<val_t>(valbytes + offsetval));
       if (vars != nullptr) {
-        set_bin_error2(hist, ibin, vars[offsetvar]);
+        set_bin_error2(hist, ibin, bit_cast_ptr<var_t>(varbytes + offsetval));
       }
     }
   }
