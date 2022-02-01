@@ -2,15 +2,47 @@
 #include <cstddef>
 #include <new>
 #include <type_traits>
+#include <utility>
 
 namespace narf {
 
   template <typename T>
   T *start_lifetime_as(void *p) {
-    // n.b. std::launder for std::memmove src is not required under the standard, but needed
-    // to work around a gcc bug: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95349
-    std::memmove(p, std::launder(static_cast<std::byte*>(p)), sizeof(T));
+#ifdef __clang__
+    // minimal standard-compliant version (which clang is known to handle correctly)
+    // Under implicit lifetime rules http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/p0593r6.html
+    // this is interpreted as equivalent to:
+    // 1) copying contents of p to an intermediate buffer
+    // 2) implicitly creating instance of T in memory pointed to by p
+    // 3) copying contents of intermediate buffer back to p
+    // 4) getting a pointer to the implicitly created T and returning it
+    // In practice clang will (correctly) optimize this to a no-op
+    std::memmove(p, p, sizeof(T));
     return std::launder(static_cast<T*>(p));
+#else
+    // at least gcc is known to not handle the above code properly
+    // (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95349)
+    // This version can be interpreted as equivalent to
+    // 1) copying contents of p to an intermediate buffer
+    // 2) implicitly creating array of bytes and its elements in the memory pointed to by p
+    // 3) copying contents of intermediate buffer back to p
+    // 4) getting a pointer to the implicitly created array of bytes
+    // 5) copying contents of array to another intermediate buffer
+    // 6) implicitly creating instance of T in memory pointed to by p
+    // 7) copying contents of intermediate buffer back to p
+    // 8) getting a pointer to the implicitly created T and returning it
+    // In practice gcc will optimize out the first memmove, but the presence of std::launder
+    // for the source of the second memmove prevents it from being optimized out
+    // (and unfortunately this is the only known way to get the correct behaviour,
+    // by erasing the dynamic type)
+    // n.b. this code is also in principle standard compliant and correct, so it SHOULD be fine
+    // on any other standard-compliant compiler, but might be harder to optimize
+    std::memmove(p, p, sizeof(T));
+    std::byte *b = std::launder(static_cast<std::byte*>(p));
+    std::memmove(p, b, sizeof(T));
+    return std::launder(static_cast<T*>(p));
+#endif
+
   }
 
   template <typename T>
@@ -18,8 +50,20 @@ namespace narf {
     // n.b. std::launder for std::memmove src is not required under the standard, but needed
     // to work around a gcc bug: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95349
     if (p) {
-      std::memmove(p, std::launder(static_cast<std::byte*>(p)), size*sizeof(T));
+      // see explanation above in start_lifetime_as
+      // logic is directly equivalent except the implicitly created object is an array of T
+      // and its elements
+#ifdef __clang__
+      std::cout << "clang path\n";
+      std::memmove(p, p, size*sizeof(T));
       return std::launder(static_cast<T*>(p));
+#else
+      std::cout << "gcc path\n";
+      std::memmove(p, p, size*sizeof(T));
+      std::byte *b = std::launder(static_cast<std::byte*>(p));
+      std::memmove(p, b, size*sizeof(T));
+      return std::launder(static_cast<T*>(p));
+#endif
     }
     return static_cast<T*>(p);
   }
