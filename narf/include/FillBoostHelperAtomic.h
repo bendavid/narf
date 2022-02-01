@@ -386,6 +386,7 @@ namespace narf {
 
             if constexpr (storage_traits<typename HIST::storage_type>::is_adopted) {
               // adopted storage, clear the histogram so that storage is released
+//               std::cout << "adopted storage, clearning\n";
               fObject.reset();
             }
          }
@@ -395,6 +396,12 @@ namespace narf {
       }
 
       std::shared_ptr<HIST> GetResultPtr() const {
+        // don't actually return the histogram in the case of adopted storage, since we need
+        // it to be deleted in Finalize()
+         if constexpr (storage_traits<typename HIST::storage_type>::is_adopted) {
+            return std::shared_ptr<HIST>();
+         }
+
          return fObject;
       }
 
