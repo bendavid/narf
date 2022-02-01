@@ -3,6 +3,10 @@
 #include <new>
 #include <type_traits>
 #include <utility>
+#include <bit>
+
+#ifndef NARF_VIEW_H
+#define NARF_VIEW_H
 
 namespace narf {
 
@@ -83,6 +87,38 @@ namespace narf {
 
   template< class T >
   inline constexpr bool is_implicit_lifetime_v = is_implicit_lifetime<T>::value;
+
+#if __cplusplus < 202002L
+  template <class To, class From>
+  std::enable_if_t<
+    sizeof(To) == sizeof(From) &&
+    std::is_trivially_copyable_v<From> &&
+    std::is_trivially_copyable_v<To>,
+    To>
+  // constexpr support needs compiler magic
+  bit_cast(const From& src) noexcept
+  {
+
+    static_assert(is_implicit_lifetime_v<To> || std::is_default_constructible_v<To>,
+      "This implementation additionally requires destination type to be either implicit lifetime or default constructible.");
+
+    if constexpr (is_implicit_lifetime_v<To>) {
+      alignas(To) std::byte storage[sizeof(To)];
+      // implicitly creates To
+      std::memcpy(storage, &src, sizeof(To));
+      To &dst = *std::launder(reinterpret_cast<To*>(storage));
+      return dst;
+    }
+    else if constexpr (std::is_default_constructible_v<To>) {
+      To dst;
+      std::memcpy(&dst, &src, sizeof(To));
+      return dst;
+    }
+  }
+#else
+  template<class To, class From>
+  using bit_cast = std::bit_cast<To, From>;
+#endif
 
   // class which temporarily reinterprets an object as a different type without making a copy.
   // Depending on which constructor is used, the object representation of the initial object
@@ -334,3 +370,5 @@ namespace narf {
   };
 
 }
+
+#endif
