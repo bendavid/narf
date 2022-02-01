@@ -98,7 +98,7 @@ namespace narf {
   public:
 
     template <typename U,
-              typename std::enable_if_t<is_implicit_lifetime_v<U> && std::is_trivially_copyable_v<U>
+              typename = std::enable_if_t<is_implicit_lifetime_v<U> && std::is_trivially_copyable_v<U>
                     && is_implicit_lifetime_v<T> && std::is_trivially_copyable_v<T>
                     && sizeof(U) == sizeof(T)>>
     view(U &from) : data_(start_lifetime_as<T>(&from)) {}
@@ -116,7 +116,7 @@ namespace narf {
                                         && std::is_trivially_copyable_v<U>
                                         && sizeof(U) == sizeof(T)
                                         && std::is_constructible_v<T, Args...>>>
-    view(U &from, in_place_t, Args&&... args) : data_(new (&from) T(std::forward<Args>(args)...)) {
+    view(U &from, std::in_place_t, Args&&... args) : data_(new (&from) T(std::forward<Args>(args)...)) {
       // destructor of T need not be trivial, but program must not rely on its side effects
     }
 
@@ -125,7 +125,7 @@ namespace narf {
                                         && std::is_trivially_copyable_v<U>
                                         && sizeof(T) % sizeof(U) == 0
                                         && std::is_constructible_v<T, Args...>>>
-    view(U *from, std::size_t /*from_size*/, in_place_t, Args&&... args) : data_(new (from) T(std::forward<Args>(args)...)) {
+    view(U *from, std::size_t /*from_size*/, std::in_place_t, Args&&... args) : data_(new (from) T(std::forward<Args>(args)...)) {
       // destructor of T need not be trivial, but program must not rely on its side effects
 
       //TODO check size at runtime?
@@ -222,7 +222,7 @@ namespace narf {
                                     std::is_trivially_copyable_v<U> &&
                                     sizeof(U) % sizeof(T) == 0
                                     && std::is_constructible_v<T, Args...>>>
-    array_view(U &from, in_place_t, Args&&... args) : size_(sizeof(U) / sizeof(T)),
+    array_view(U &from, std::in_place_t, Args&&... args) : size_(sizeof(U) / sizeof(T)),
                                                   data_(static_cast<T*>(::operator new[] (size_*sizeof(T), &from))) {
 
       // array of T is implicitly created by operator new[] and a pointer to a suitable object is produced,
@@ -242,7 +242,7 @@ namespace narf {
         typename = std::enable_if_t<is_implicit_lifetime_v<U>
                                   && std::is_trivially_copyable_v<U>
                                   && std::is_constructible_v<T, Args...>>>
-    array_view(U *from, std::size_t from_size, in_place_t, Args&&... args) : size_(from_size * sizeof(U) / sizeof(T)),
+    array_view(U *from, std::size_t from_size, std::in_place_t, Args&&... args) : size_(from_size * sizeof(U) / sizeof(T)),
                                                   data_(static_cast<T*>(::operator new[] (size_*sizeof(T), from))) {
 
       // array of T is implicitly created by operator new[] and a pointer to a suitable object is produced,
