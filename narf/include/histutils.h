@@ -212,26 +212,68 @@ namespace narf {
 
     template <typename HIST>
     void to_boost(HIST &hist) const {
-      //TODO multithreading for this
-      constexpr std::size_t rank = NDims;
-      std::array<ptrdiff_t, rank> flow_offsets;
-      for (std::size_t idim = 0; idim < rank; ++idim) {
-        flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
-      }
 
-      for (auto&& x: indexed(hist, coverage::all)) {
-        std::array<std::ptrdiff_t, rank> idxs;
-        for (std::size_t idim = 0; idim < rank; ++idim) {
-          idxs[idim] = x.index(idim) + flow_offsets[idim];
+      //TODO multithreading for this
+
+      constexpr std::size_t rank = NDims;
+
+      using acc_t = typename HIST::storage_type::value_type;
+      using acc_trait = narf::acc_traits<acc_t>;
+
+
+
+      if constexpr (acc_trait::is_tensor) {
+        const auto fillrank = hist.rank();
+
+        std::vector<ptrdiff_t> flow_offsets(fillrank);
+        for (std::size_t idim = 0; idim < fillrank; ++idim) {
+          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
         }
 
-        auto &acc_val = *x;
+        for (auto&& x: indexed(hist, coverage::all)) {
+          std::array<std::ptrdiff_t, rank> idxs;
+          for (std::size_t idim = 0; idim < fillrank; ++idim) {
+            idxs[idim] = x.index(idim) + flow_offsets[idim];
+          }
 
-        const std::byte *elem = element_ptr(idxs);
+          auto &tensor_acc_val = *x;
 
-        T acc_val_tmp;
-        std::memcpy(&acc_val_tmp, elem, sizeof(T));
-        acc_val = acc_val_tmp;
+          for (auto it = tensor_acc_val.indices_begin(); it != tensor_acc_val.indices_end(); ++it) {
+            const auto tensor_indices = it.indices;
+            for (std::size_t idim = fillrank; idim < rank; ++idim) {
+              idxs[idim] = tensor_indices[idim - fillrank];
+            }
+
+            auto &acc_val = std::apply(tensor_acc_val.data(), tensor_indices);
+
+            const std::byte *elem = element_ptr(idxs);
+
+            T acc_val_tmp;
+            std::memcpy(&acc_val_tmp, elem, sizeof(T));
+            acc_val = acc_val_tmp;
+          }
+        }
+      }
+      else {
+        std::array<ptrdiff_t, rank> flow_offsets;
+        for (std::size_t idim = 0; idim < rank; ++idim) {
+          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
+        }
+
+        for (auto&& x: indexed(hist, coverage::all)) {
+          std::array<std::ptrdiff_t, rank> idxs;
+          for (std::size_t idim = 0; idim < rank; ++idim) {
+            idxs[idim] = x.index(idim) + flow_offsets[idim];
+          }
+
+          auto &acc_val = *x;
+
+          const std::byte *elem = element_ptr(idxs);
+
+          T acc_val_tmp;
+          std::memcpy(&acc_val_tmp, elem, sizeof(T));
+          acc_val = acc_val_tmp;
+        }
       }
     }
 
