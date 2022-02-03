@@ -257,15 +257,10 @@ namespace narf {
             }
 
             if constexpr(acc_trait::is_tensor) {
-
-//
-//                std::cout << "tensor conversion" << std::endl;
-
                auto constexpr tensor_rank = acc_t::rank;
                const auto fillrank = fFillObject->rank();
 
                const auto rank = fillrank + tensor_rank;
-
 
 //                std::cout << "fillrank = " << fillrank << " rank = " << rank << " tensor_rank = " << tensor_rank << std::endl;
 
@@ -283,14 +278,20 @@ namespace narf {
                   }
 
                   // convert from root to boost numbering/zero-indexing
+                  bool valididxs = true;
                   for (unsigned int idim = 0; idim < tensor_rank; ++idim) {
                      tensor_idxs[idim] = idxs[fillrank + idim] - 1;
+                     if (tensor_idxs[idim] < 0 || tensor_idxs[idim] >= acc_t::sizes[idim]) {
+                        valididxs = false;
+                     }
                   }
+
                   // no overflow or underflow for tensor, so corresponding bins
                   // are unfilled and zero by construction
-                  if (*std::min_element(tensor_idxs.begin(), tensor_idxs.end()) < 0) {
-                     continue;
+                  if (!valididxs) {
+                    continue;
                   }
+
                   auto const &acc_val = fFillObject->at(boost_idxs);
                   auto const &val = std::apply(acc_val.data(), tensor_idxs);
 
