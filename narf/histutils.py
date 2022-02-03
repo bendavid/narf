@@ -100,47 +100,6 @@ def convert_storage_type(storage_type, force_atomic = False):
     else:
         raise TypeError("storage must be a boost_histogram or compatible storage type")
 
-def make_pyroot_view(hist_hist, force_atomic = False, do_init = False):
-
-    arr = hist_hist.view(flow = True).__array_interface__
-
-    addr = arr["data"][0]
-    shape = arr["shape"]
-    elem_size = int(arr["typestr"][2:])
-    strides = arr["strides"]
-    buf = cppyy.ll.reinterpret_cast["void*"](addr)
-
-    size = math.prod(shape)
-    size_bytes = size*elem_size
-
-    # compute strides for a fortran-style contiguous array with the given shape
-    stridesf = []
-    current_stride = elem_size
-    for axis_size in shape:
-        stridesf.append(current_stride)
-        current_stride *= axis_size
-    stridesf = tuple(stridesf)
-
-    if strides is None:
-        #default stride for C-style contiguous array
-        strides = tuple(reversed(stridesf))
-
-    # check that memory is a fortran-style contiguous array
-    if strides != stridesf:
-        raise ValueError("memory is not a contiguous fortran-style array as required by the C++ class")
-
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in hist_hist.axes]
-    cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
-
-    h = ROOT.narf.make_histogram_adopted[cppstoragetype, bool_to_string(do_init)](buf, size_bytes, *cppaxes)
-
-    storage_order_match = ROOT.narf.check_storage_order(h, strides)
-
-    if not storage_order_match:
-        raise ValueError("mismatched storage ordering")
-
-    return h
-
 def make_array_interface_view(boost_hist):
     view = boost_hist.view(flow = True)
     addr = view.__array_interface__["data"][0]
@@ -208,10 +167,6 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     _hist = hist.Hist(*python_axes, storage = storage)
 
     arrview = make_array_interface_view(_hist)
-
-    h = make_pyroot_view(_hist, force_atomic = force_atomic and not tensor_weight, do_init = True)
-
-    hfill = None
 
     if tensor_weight:
         # weight is a tensor type, using tensor-storage directly

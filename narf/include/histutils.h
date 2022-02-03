@@ -2,7 +2,6 @@
 #define NARF_HISTUTILS_H
 
 #include <boost/histogram.hpp>
-#include "adopted_storage.h"
 #include "traits.h"
 #include "atomic_adaptor.h"
 #include "tensorutils.h"
@@ -13,12 +12,6 @@
 
 namespace narf {
   using namespace boost::histogram;
-
-  template <typename T, typename A>
-  adopted_storage<T> make_adopted_storage(A addr, std::size_t size_bytes) {
-    void *buffer = reinterpret_cast<void*>(addr);
-    return adopted_storage<T>(buffer, size_bytes);
-  }
 
   template<typename Axis, typename... Axes>
   histogram<std::tuple<std::decay_t<Axis>, std::decay_t<Axes>...>, default_storage>
@@ -60,19 +53,6 @@ namespace narf {
   histogram<std::tuple<std::decay_t<Axes>...>, dense_storage<T>>
   make_histogram_dense(Axes&&... axes) {
     return make_histogram_with(dense_storage<T>(), std::forward<Axes>(axes)...);
-  }
-
-  template<typename T, bool do_init, typename... Axes>
-  histogram<std::tuple<std::decay_t<Axes>...>, adopted_storage<T, do_init>>
-  make_histogram_adopted(void *buffer, std::size_t buf_size, Axes&&... axes) {
-    adopted_storage<T, do_init> storage(buffer, buf_size);
-    auto h = make_histogram_with(std::move(storage), std::forward<Axes>(axes)...);
-
-    if (h.size()*sizeof(T) != buf_size) {
-      throw std::runtime_error("size mismatch");
-    }
-
-    return h;
   }
 
   template<typename DFType, typename Helper, typename... ColTypes>
