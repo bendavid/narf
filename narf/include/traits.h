@@ -52,6 +52,10 @@ struct tensor_traits<T, std::enable_if_t<ROOT::Internal::RDF::IsDataContainer<T>
   static constexpr bool is_container = true;
 };
 
+template <typename T>
+struct is_array_interface_view : public std::false_type{
+};
+
 #if __cplusplus < 202002L
 template< class T >
 struct type_identity {

@@ -141,6 +141,45 @@ def make_pyroot_view(hist_hist, force_atomic = False, do_init = False):
 
     return h
 
+def make_array_interface_view(boost_hist):
+    view = boost_hist.view(flow = True)
+    addr = view.__array_interface__["data"][0]
+    arr = cppyy.ll.reinterpret_cast["void*"](addr)
+
+    elem_size = int(view.__array_interface__["typestr"][2:])
+    shape = view.__array_interface__["shape"]
+    strides = view.__array_interface__["strides"]
+
+    # compute strides for a fortran-style contiguous array with the given shape
+    # TODO factorize this into a common function
+    stridesf = []
+    current_stride = elem_size
+    for axis_size in shape:
+        stridesf.append(current_stride)
+        current_stride *= axis_size
+    stridesf = tuple(stridesf)
+
+    if strides is None:
+        #default stride for C-style contiguous array
+        strides = tuple(reversed(stridesf))
+
+    acc_type = convert_storage_type(boost_hist._storage_type)
+    arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides)
+
+    return arrview
+
+def hist_to_pyroot_boost(hist_hist, force_atomic = False):
+    arrview = make_array_interface_view(hist_hist)
+
+    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in hist_hist.axes]
+    cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
+
+    pyroot_boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
+
+    arrview.to_boost(pyroot_boost_hist)
+
+    return pyroot_boost_hist
+
 def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled(), var_axis_names = None):
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
@@ -168,6 +207,8 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     _hist = hist.Hist(*python_axes, storage = storage)
 
+    arrview = make_array_interface_view(_hist)
+
     h = make_pyroot_view(_hist, force_atomic = force_atomic and not tensor_weight, do_init = True)
 
     hfill = None
@@ -185,29 +226,33 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         else:
             raise TypeError("Requested storage type is not supported with tensor weights currently")
 
-        cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
-
         if force_atomic:
             cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
-
-        #print("storage type: ", cppstoragetype.__cpp_name__)
-        hfill = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
-
-        #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
-
-        helper = ROOT.narf.FillBoostHelperAtomic[type(h), type(hfill)](ROOT.std.move(h), ROOT.std.move(hfill))
-
-        #targs = tuple([type(df), type(helper)] + coltypes)
-        #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
-        #targsstr = ",".join(targsnames)
-        #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(h).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
-        #assert(0)
     else:
-        #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}>;")
+        cppstoragetype = convert_storage_type(type(storage), force_atomic = force_atomic)
 
-        helper = ROOT.narf.FillBoostHelperAtomic[type(h)](ROOT.std.move(h))
+    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+
+
+
+    #print("storage type: ", cppstoragetype.__cpp_name__)
+    hfill = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
+
+    #if arrview.size() != hfill.size():
+        #raise ValueError("Mismatched sizes")
+
+    #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
+
+    helper = ROOT.narf.FillBoostHelperAtomic[type(arrview), type(hfill)](ROOT.std.move(arrview), ROOT.std.move(hfill))
 
     targs = tuple([type(df), type(helper)] + coltypes)
+
+    #if tensor_weight:
+        #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
+        #targsstr = ",".join(targsnames)
+        #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+        #assert(0)
+
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
 
     res.name = name
@@ -299,21 +344,31 @@ def root_to_hist(root_hist):
     boost_axes = [_convert_root_axis_to_hist(axis) for axis in axes]
     boost_hist = hist.Hist(*boost_axes, storage = bh.storage.Weight())
 
-    vals = boost_hist.values(flow = True)
-    valsaddr = vals.__array_interface__["data"][0]
-    valsarr = cppyy.ll.reinterpret_cast["void*"](valsaddr)
-    valsstrides = vals.__array_interface__["strides"]
+    view = boost_hist.view(flow = True)
+    addr = view.__array_interface__["data"][0]
+    arr = cppyy.ll.reinterpret_cast["void*"](addr)
 
-    variances = boost_hist.variances(flow = True)
-    varsaddr = variances.__array_interface__["data"][0]
-    if varsaddr == valsaddr:
-        varsarr = cppyy.nullptr
-        varsstrides = valsstrides
-    else:
-        varsarr = cppyy.ll.reinterpret_cast["void*"](varsaddr)
-        varsstrides = variances.__array_interface__["strides"]
+    elem_size = int(view.__array_interface__["typestr"][2:])
+    shape = view.__array_interface__["shape"]
+    strides = view.__array_interface__["strides"]
 
-    ROOT.narf.fill_boost(root_hist, valsarr, varsarr, valsstrides, varsstrides)
+    # compute strides for a fortran-style contiguous array with the given shape
+    # TODO factorize this into a common function
+    stridesf = []
+    current_stride = elem_size
+    for axis_size in shape:
+        stridesf.append(current_stride)
+        current_stride *= axis_size
+    stridesf = tuple(stridesf)
+
+    if strides is None:
+        #default stride for C-style contiguous array
+        strides = tuple(reversed(stridesf))
+
+    acc_type = convert_storage_type(boost_hist._storage_type)
+    arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides)
+
+    arrview.from_root(root_hist)
 
     return boost_hist
 
@@ -393,23 +448,35 @@ def hist_to_root(boost_hist):
             xhighs = array.array("d", xhighs)
             root_hist = ROOT.THnT["double"](name, "", len(boost_hist.axes), nbins, xlows, xhighs)
 
+    view = boost_hist.view(flow = True)
+    addr = view.__array_interface__["data"][0]
+    print(addr)
+    arr = cppyy.ll.reinterpret_cast["void*"](addr)
 
-    vals = boost_hist.values(flow = True)
-    valsaddr = vals.__array_interface__["data"][0]
-    valsarr = cppyy.ll.reinterpret_cast["void*"](valsaddr)
-    valsstrides = vals.__array_interface__["strides"]
+    elem_size = int(view.__array_interface__["typestr"][2:])
+    shape = view.__array_interface__["shape"]
+    strides = view.__array_interface__["strides"]
 
-    variances = boost_hist.variances(flow = True)
-    varsaddr = variances.__array_interface__["data"][0]
-    if varsaddr == valsaddr:
-        varsarr = cppyy.nullptr
-        varsstrides = valsstrides
-    else:
-        varsarr = cppyy.ll.reinterpret_cast["void*"](varsaddr)
-        varsstrides = variances.__array_interface__["strides"]
+    # compute strides for a fortran-style contiguous array with the given shape
+    # TODO factorize this into a common function
+    stridesf = []
+    current_stride = elem_size
+    for axis_size in shape:
+        stridesf.append(current_stride)
+        current_stride *= axis_size
+    stridesf = tuple(stridesf)
+
+    if strides is None:
+        #default stride for C-style contiguous array
+        strides = tuple(reversed(stridesf))
+
+    acc_type = convert_storage_type(boost_hist._storage_type)
+    arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides)
+
+    if ROOT.narf.acc_traits[acc_type].is_weighted_sum:
         root_hist.Sumw2()
 
-    ROOT.narf.fill_root(root_hist, valsarr, varsarr, valsstrides, varsstrides)
+    arrview.to_root(root_hist)
 
     return root_hist
 
@@ -527,6 +594,12 @@ def _histo_with_boost(df, model, cols):
     helper = ROOT.narf.FillBoostHelperAtomic[hist_type, type(boost_hist)](model, ROOT.std.move(boost_hist))
 
     targs = tuple([type(df), type(helper)] + coltypes)
+
+    #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
+    #targsstr = ",".join(targsnames)
+    #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{hist_type.__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+    #assert(0)
+
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
 
     return res

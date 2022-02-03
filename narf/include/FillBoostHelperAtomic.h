@@ -340,74 +340,14 @@ namespace narf {
                }
             }
          }
-         else {
-            //TODO multithreading for this
-            // these might or might not be the same type, so just check the addresses
-            if (static_cast<void*>(fFillObject.get()) != static_cast<void*>(fObject.get())) {
-               // fill from one boost histogram to another
-               const auto rank = fObject->rank();
-               const auto fillrank = fFillObject->rank();
-
-               if constexpr (acc_trait::is_tensor) {
-                  auto constexpr tensor_rank = acc_t::rank;
-
-                  std::vector<int> idxs(fillrank, 0);
-                  std::array<std::ptrdiff_t, tensor_rank> tensor_idxs;
-                  for (auto&& x: indexed(*fObject, coverage::all)) {
-//                      std::cout << "element" << std::endl;
-                     for (unsigned int idim = 0; idim < fillrank; ++idim) {
-                        idxs[idim] = x.index(idim);
-//                         std::cout << "primary idx: " << idim << " " << idxs[idim] << std::endl;
-                     }
-                     for (unsigned int idim = 0; idim < tensor_rank; ++idim) {
-                        tensor_idxs[idim] = x.index(fillrank + idim);
-//                         std::cout << "tensor idx: " << idim << " " << tensor_idxs[idim] << std::endl;
-                     }
-                     // skip overflow/underflow bins for axes corresponding to the tensor weight
-                     // since these are not filled and are zero by construction
-                     if (*std::min_element(tensor_idxs.begin(), tensor_idxs.end()) < 0) {
-                        continue;
-                     }
-                     auto const &acc_val = fFillObject->at(idxs);
-                     *x = std::apply(acc_val.data(), tensor_idxs);
-                  }
-               }
-               else {
-                  std::vector<int> idxs(rank, 0);
-                  for (auto&& x: indexed(*fObject, coverage::all)) {
-                     for (unsigned int idim = 0; idim < rank; ++idim) {
-                        idxs[idim] = x.index(idim);
-                     }
-                     auto const &acc_val = fFillObject->at(idxs);
-                     *x = acc_val;
-                  }
-               }
-            }
-
-            if constexpr (!(isTH1 || isTHn)) {
-              if constexpr (storage_traits<typename HIST::storage_type>::is_adopted) {
-                // adopted storage, clear the histogram so that storage is released
-  //               std::cout << "adopted storage, clearning\n";
-                fObject.reset();
-              }
-            }
+         else if constexpr (is_array_interface_view<HIST>::value) {
+            fObject->from_boost(*fFillObject);
          }
 
          fFillObject.reset();
-
       }
 
       std::shared_ptr<HIST> GetResultPtr() const {
-        // don't actually return the histogram in the case of adopted storage, since we need
-        // it to be deleted in Finalize()
-         constexpr bool isTH1 = std::is_base_of<TH1, HIST>::value;
-         constexpr bool isTHn = std::is_base_of<THnBase, HIST>::value;
-         if constexpr (!(isTH1 || isTHn)) {
-          if constexpr (storage_traits<typename HIST::storage_type>::is_adopted) {
-              return std::shared_ptr<HIST>();
-          }
-         }
-
          return fObject;
       }
 

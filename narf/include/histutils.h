@@ -103,11 +103,13 @@ namespace narf {
     return hist.GetBinError2(ibin);
   }
 
-  void fill_idxs(const TH1& hist, int ibin, std::vector<int> &idxs) {
+  template <typename A>
+  void fill_idxs(const TH1& hist, int ibin, A &idxs) {
     hist.GetBinXYZ(ibin, idxs[0], idxs[1], idxs[2]);
   }
 
-  void fill_idxs(const THnBase& hist, Long64_t ibin, std::vector<int> &idxs) {
+  template <typename A>
+  void fill_idxs(const THnBase& hist, Long64_t ibin, A &idxs) {
     hist.GetBinContent(ibin, idxs.data());
   }
 
@@ -127,70 +129,6 @@ namespace narf {
     hist.SetBinError2(ibin, var);
   }
 
-  template <typename HIST, typename val_t = double, typename var_t = val_t>
-  void fill_boost(const HIST &hist, void* vals, void *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
-    std::byte *valbytes = static_cast<std::byte*>(vals);
-    std::byte *varbytes = static_cast<std::byte*>(vars);
-
-    const auto rank = stridevals.size();
-
-    // has to be at least 3 for TH1 case
-    std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
-    const auto nbins = get_n_bins(hist);
-    for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
-      fill_idxs(hist, ibin, idxs);
-
-      std::size_t offsetval = 0;
-      std::size_t offsetvar = 0;
-      for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-        offsetval += stridevals[iaxis]*idxs[iaxis];
-        if (vars != nullptr) {
-          offsetvar += stridevars[iaxis]*idxs[iaxis];
-        }
-      }
-
-      const val_t &val = hist.GetBinContent(ibin);
-      std::memcpy(valbytes + offsetval, &val, sizeof(val_t));
-      if (vars != nullptr) {
-        const var_t &var = get_bin_error2(hist, ibin);
-        std::memcpy(varbytes + offsetvar, &var, sizeof(var_t));
-      }
-    }
-  }
-
-  template <typename HIST, typename val_t = double, typename var_t = val_t>
-  void fill_root(HIST &hist, const void* vals, const void *vars, const std::vector<int> &stridevals, const std::vector<int> &stridevars) {
-    const std::byte *valbytes = static_cast<const std::byte*>(vals);
-    const std::byte *varbytes = static_cast<const std::byte*>(vars);
-
-    const auto rank = stridevals.size();
-
-    // has to be at least 3 for TH1 case
-    std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
-    const auto nbins = get_n_bins(hist);
-    for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
-      fill_idxs(hist, ibin, idxs);
-
-      std::size_t offsetval = 0;
-      std::size_t offsetvar = 0;
-      for (unsigned int iaxis = 0; iaxis < rank; ++iaxis) {
-        offsetval += stridevals[iaxis]*idxs[iaxis];
-        if (vars != nullptr) {
-          offsetvar += stridevars[iaxis]*idxs[iaxis];
-        }
-      }
-
-      val_t val;
-      std::memcpy(&val, valbytes + offsetval, sizeof(val_t));
-      hist.SetBinContent(ibin, val);
-      if (vars != nullptr) {
-        var_t var;
-        std::memcpy(&var, varbytes + offsetvar, sizeof(var_t));
-        set_bin_error2(hist, ibin, var);
-      }
-    }
-  }
-
   template <typename HIST>
   bool check_storage_order(const HIST &hist, const std::vector<int> &strides) {
     const std::vector<int> origin(strides.size(), 0);
@@ -207,6 +145,212 @@ namespace narf {
 
     return true;
   }
+
+  template<typename T, std::size_t NDims, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
+  class array_interface_view {
+
+    // TODO memcpy cast directly to accumulator types instead of underlying values to avoid hardcoded offsets?
+
+  public:
+
+    // TODO handle other index types for constructor?
+    array_interface_view(void *buffer, const std::vector<int> &sizes, const std::vector<int> &strides) :
+      data_(static_cast<std::byte*>(buffer)) {
+
+        for (std::size_t idim = 0; idim < NDims; ++idim) {
+          sizes_[idim] = sizes[idim];
+          strides_[idim] = strides[idim];
+        }
+
+    }
+
+    std::ptrdiff_t size() const { return std::accumulate(sizes_.begin(), sizes_.end(), 1, std::multiplies<std::ptrdiff_t>()); }
+
+    template <typename HIST>
+    void from_boost(HIST &hist) {
+      //TODO multithreading for this
+
+      constexpr std::size_t rank = NDims;
+
+      using acc_t = typename HIST::storage_type::value_type;
+      using acc_trait = narf::acc_traits<acc_t>;
+
+
+
+      if constexpr (acc_trait::is_tensor) {
+        const auto fillrank = hist.rank();
+
+        std::vector<ptrdiff_t> flow_offsets(fillrank);
+        for (std::size_t idim = 0; idim < fillrank; ++idim) {
+          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
+        }
+
+        for (auto&& x: indexed(hist, coverage::all)) {
+          std::array<std::ptrdiff_t, rank> idxs;
+          for (std::size_t idim = 0; idim < fillrank; ++idim) {
+            idxs[idim] = x.index(idim) + flow_offsets[idim];
+          }
+
+          auto const &tensor_acc_val = *x;
+
+          for (auto it = tensor_acc_val.indices_begin(); it != tensor_acc_val.indices_end(); ++it) {
+            const auto tensor_indices = it.indices;
+            for (std::size_t idim = fillrank; idim < rank; ++idim) {
+              idxs[idim] = tensor_indices[idim - fillrank];
+            }
+
+            auto const &acc_val = std::apply(tensor_acc_val.data(), tensor_indices);
+
+            std::byte *elem = element_ptr(idxs);
+
+            T acc_val_tmp = acc_val;
+            std::memcpy(elem, &acc_val_tmp, sizeof(T));
+          }
+        }
+      }
+      else {
+        std::array<ptrdiff_t, rank> flow_offsets;
+        for (std::size_t idim = 0; idim < rank; ++idim) {
+          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
+        }
+
+        for (auto&& x: indexed(hist, coverage::all)) {
+          std::array<std::ptrdiff_t, rank> idxs;
+          for (std::size_t idim = 0; idim < rank; ++idim) {
+            idxs[idim] = x.index(idim) + flow_offsets[idim];
+          }
+
+          auto const &acc_val = *x;
+
+          std::byte *elem = element_ptr(idxs);
+
+          const T acc_val_tmp = acc_val;
+          std::memcpy(elem, &acc_val_tmp, sizeof(T));
+        }
+      }
+    }
+
+    template <typename HIST>
+    void to_boost(HIST &hist) const {
+      //TODO multithreading for this
+      constexpr std::size_t rank = NDims;
+      std::array<ptrdiff_t, rank> flow_offsets;
+      for (std::size_t idim = 0; idim < rank; ++idim) {
+        flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
+      }
+
+      for (auto&& x: indexed(hist, coverage::all)) {
+        std::array<std::ptrdiff_t, rank> idxs;
+        for (std::size_t idim = 0; idim < rank; ++idim) {
+          idxs[idim] = x.index(idim) + flow_offsets[idim];
+        }
+
+        auto &acc_val = *x;
+
+        const std::byte *elem = element_ptr(idxs);
+
+        T acc_val_tmp;
+        std::memcpy(&acc_val_tmp, elem, sizeof(T));
+        acc_val = acc_val_tmp;
+      }
+    }
+
+    template <typename HIST>
+    void from_root(HIST &hist) {
+      constexpr std::size_t rank = NDims;
+
+      // has to be at least 3 for TH1 case
+      constexpr std::size_t arr_size = std::max(rank, static_cast<decltype(rank)>(3));
+
+      const auto nbins = get_n_bins(hist);
+      for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
+
+        std::array<int, arr_size> idxs{};
+        fill_idxs(hist, ibin, idxs);
+
+        // different type and might be different size
+        std::array<std::ptrdiff_t, NDims> actual_idxs;
+        for (std::size_t idim = 0; idim < rank; ++idim) {
+          actual_idxs[idim] = idxs[idim];
+        }
+
+        std::byte *elem = element_ptr(actual_idxs);
+
+        if constexpr (acc_traits<T>::is_weighted_sum) {
+          const T acc_val_tmp(hist.GetBinContent(ibin), get_bin_error2(hist, ibin));
+          std::memcpy(elem, &acc_val_tmp, sizeof(T));
+        }
+        else {
+          const T acc_val_tmp = hist.GetBinContent(ibin);
+          std::memcpy(elem, &acc_val_tmp, sizeof(T));
+        }
+      }
+    }
+
+
+    template <typename HIST>
+    void to_root(HIST &hist) const {
+      constexpr std::size_t rank = NDims;
+
+      // has to be at least 3 for TH1 case
+      constexpr std::size_t arr_size = std::max(rank, static_cast<decltype(rank)>(3));
+
+      const auto nbins = get_n_bins(hist);
+      for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
+
+        std::array<int, arr_size> idxs{};
+        fill_idxs(hist, ibin, idxs);
+
+        // different type and might be different size
+        std::array<std::ptrdiff_t, NDims> actual_idxs;
+        for (std::size_t idim = 0; idim < rank; ++idim) {
+          actual_idxs[idim] = idxs[idim];
+        }
+
+        const std::byte *elem = element_ptr(actual_idxs);
+
+        T acc_val_tmp;
+        std::memcpy(&acc_val_tmp, elem, sizeof(T));
+
+        if constexpr (acc_traits<T>::is_weighted_sum) {
+          hist.SetBinContent(ibin, acc_val_tmp.value());
+          set_bin_error2(hist, ibin, acc_val_tmp.variance());
+
+        }
+        else {
+          hist.SetBinContent(ibin, acc_val_tmp);
+        }
+      }
+    }
+
+
+  private:
+
+    std::ptrdiff_t element_offset(const std::array<std::ptrdiff_t, NDims> &idxs) const {
+      std::ptrdiff_t offset = 0;
+      for (std::size_t idim = 0; idim < NDims; ++idim) {
+        offset += idxs[idim]*strides_[idim];
+      }
+      return offset;
+    }
+
+    std::byte *element_ptr(const std::array<std::ptrdiff_t, NDims> &idxs) {
+      return data_ + element_offset(idxs);
+    }
+
+    const std::byte *element_ptr(const std::array<std::ptrdiff_t, NDims> &idxs) const {
+      return data_ + element_offset(idxs);
+    }
+
+    std::byte *data_;
+    std::array<std::ptrdiff_t, NDims> sizes_;
+    std::array<std::ptrdiff_t, NDims> strides_;
+
+  };
+
+  template<typename T, std::size_t NDims>
+  struct is_array_interface_view<array_interface_view<T, NDims>> : public std::true_type{
+  };
 
 }
 

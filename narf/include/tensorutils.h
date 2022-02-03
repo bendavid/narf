@@ -31,7 +31,33 @@ public:
   // compile-time size
   static constexpr std::ptrdiff_t size = tensor_traits<tensor_t>::size;
   static constexpr std::size_t rank = tensor_traits<tensor_t>::rank;
+  static constexpr std::array<std::ptrdiff_t, rank> sizes = tensor_traits<tensor_t>::sizes;
 
+
+  // for linear iteration over indices
+  struct index_iterator {
+
+    index_iterator &operator++() {
+      ++linear_index;
+      for (std::size_t idim = 0; idim < rank; ++idim) {
+        if (indices[idim] < sizes[idim] - 1) {
+          ++indices[idim];
+          return *this;
+        }
+        else {
+          indices[idim] = 0;
+        }
+      }
+      return *this;
+    }
+
+    bool operator !=(const index_iterator &rhs) {
+      return linear_index != rhs.linear_index;
+    }
+
+    std::ptrdiff_t linear_index;
+    std::array<std::ptrdiff_t, rank> indices;
+  };
 
   // eigen tensors are otherwise uninitialized
   tensor_accumulator() { data_.setZero(); }
@@ -101,6 +127,11 @@ public:
 
   tensor_t &data() { return data_; }
   const tensor_t &data() const { return data_; }
+
+  index_iterator indices_begin() const { return index_iterator{}; }
+  index_iterator indices_end() const {
+    return index_iterator{size, sizes};
+  }
 
 };
 
