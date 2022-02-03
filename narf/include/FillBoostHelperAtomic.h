@@ -264,43 +264,48 @@ namespace narf {
 
 //                std::cout << "fillrank = " << fillrank << " rank = " << rank << " tensor_rank = " << tensor_rank << std::endl;
 
-               // has to be at least 3 for TH1 case
-               std::vector<int> idxs(std::max(rank, static_cast<decltype(rank)>(3)));
-               std::vector<int> boost_idxs(fillrank);
-               std::array<std::ptrdiff_t, tensor_rank> tensor_idxs;
-               const auto nbins = narf::get_n_bins(*fObject);
-               for (std::decay_t<decltype(nbins)> ibin = 0; ibin < nbins; ++ibin) {
-                  narf::fill_idxs(*fObject, ibin, idxs);
-
-                  // convert from root to boost numbering/zero-indexing
-                  for (unsigned int idim = 0; idim < fillrank; ++idim) {
-                     boost_idxs[idim] = idxs[idim] - 1;
+               std::vector<int> idxs(rank);
+               for (auto&& x: indexed(*fFillObject, coverage::all)) {
+                  for (std::size_t idim = 0; idim < fillrank; ++idim) {
+                     // convert from boost to root numbering convention
+                     idxs[idim] = x.index(idim) + 1;
                   }
 
-                  // convert from root to boost numbering/zero-indexing
-                  bool valididxs = true;
-                  for (unsigned int idim = 0; idim < tensor_rank; ++idim) {
-                     tensor_idxs[idim] = idxs[fillrank + idim] - 1;
-                     if (tensor_idxs[idim] < 0 || tensor_idxs[idim] >= acc_t::sizes[idim]) {
-                        valididxs = false;
+                  auto const &tensor_acc_val = *x;
+
+                  for (auto it = tensor_acc_val.indices_begin(); it != tensor_acc_val.indices_end(); ++it) {
+                     const auto tensor_indices = it.indices;
+                     for (std::size_t idim = fillrank; idim < rank; ++idim) {
+                        // convert from zero-indexing to root numbering convention
+                        idxs[idim] = tensor_indices[idim - fillrank] + 1;
                      }
-                  }
 
-                  // no overflow or underflow for tensor, so corresponding bins
-                  // are unfilled and zero by construction
-                  if (!valididxs) {
-                    continue;
-                  }
+                     auto const &acc_val = std::apply(tensor_acc_val.data(), tensor_indices);
 
-                  auto const &acc_val = fFillObject->at(boost_idxs);
-                  auto const &val = std::apply(acc_val.data(), tensor_idxs);
-
-                  if constexpr (is_weighted_sum) {
-                     fObject->SetBinContent(ibin, val.value());
-                     narf::set_bin_error2(*fObject, ibin, val.variance());
-                  }
-                  else {
-                     fObject->SetBinContent(ibin, val);
+                     // TODO use overloaded functions to avoid switch on histogram type here
+                     if constexpr (isTH1) {
+                        const int i = idxs[0];
+                        const int j = idxs.size() > 1 ? idxs[1] : 0;
+                        const int k = idxs.size() > 2 ? idxs[2] : 0;
+                        const auto bin = fObject->GetBin(i, j, k);
+                        if constexpr (is_weighted_sum) {
+                           fObject->SetBinContent(bin, acc_val.value());
+                           fObject->SetBinError(bin, std::sqrt(acc_val.variance()));
+                        }
+                        else {
+                           fObject->SetBinContent(bin, *x);
+                        }
+                     }
+                     else if constexpr (isTHn) {
+                        const auto bin = fObject->GetBin(idxs.data());
+                        if constexpr (is_weighted_sum) {
+                           fObject->SetBinContent(bin, acc_val.value());
+                           fObject->SetBinError2(bin, acc_val.variance());
+                        }
+                        else {
+                           fObject->SetBinContent(bin, acc_val);
+                        }
+                     }
                   }
                }
             }
