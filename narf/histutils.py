@@ -293,17 +293,19 @@ def _convert_root_hist(hist):
 
     return boost_hist
 
-def _convert_root_axis_to_hist(axis, name):
+def _convert_root_axis_to_hist(axis, name=None):
     is_regular = axis.GetXbins().fN == 0
 
     if is_regular:
         nbins = axis.GetNbins()
         xlow = axis.GetXmin()
         xhigh = axis.GetXmax()
-        return hist.axis.Regular(nbins, xlow, xhigh, name=name)
+        return hist.axis.Regular(nbins, xlow, xhigh, name=name) if name \
+                else hist.axis.Regular(nbins, xlow, xhigh)
     else:
         edges = [edge for edge in axis.GetXbins()]
-        return hist.axis.Variable(edges, name=name)
+        return hist.axis.Variable(edges, name=name) if name else \
+                hist.axis.Variable(edges)
 
 def root_to_hist(root_hist, axis_names=None):
     axes = []
@@ -321,8 +323,8 @@ def root_to_hist(root_hist, axis_names=None):
             axes.append(axis)
 
     if not axis_names:
-        axis_names = [f"axis_{i}" for i in range(len(axes))]
-    elif len(axes) != len(axis_names):
+        axis_names = [None for a in axes]
+    if len(axes) != len(axis_names):
         raise ValueError(f"Number of names given ({len(axis_names)}) does not match number of axes ({len(axes)})")
 
     boost_axes = [_convert_root_axis_to_hist(axis, name) for axis, name in zip(axes, axis_names)]
@@ -434,7 +436,6 @@ def hist_to_root(boost_hist):
 
     view = boost_hist.view(flow = True)
     addr = view.__array_interface__["data"][0]
-    print(addr)
     arr = cppyy.ll.reinterpret_cast["void*"](addr)
 
     elem_size = int(view.__array_interface__["typestr"][2:])
