@@ -106,8 +106,8 @@ def build_and_run(datasets, build_function):
                   #print(r.GetSumw())
                   #print(r.GetSumw2())
 
-            elif hasattr(r, "name"):
-                output[r.name] = r.GetValue()
+            elif hasattr(r.GetValue(), "name"):
+                output[r.GetValue().name] = r.GetValue()
                 print("sum", r.sum())
                 print("sum with overflow", r.sum(flow=True))
             else:

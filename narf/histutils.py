@@ -188,7 +188,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
                 python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = var_axis_name))
 
 
-    _hist = hist.Hist(*python_axes, storage = storage)
+    _hist = hist.Hist(*python_axes, storage = storage, name = name)
 
     arrview = make_array_interface_view(_hist)
 
@@ -234,7 +234,6 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
 
-    res.name = name
     res._hist = _hist
 
     # hide underlying C++ class and return the python version instead
