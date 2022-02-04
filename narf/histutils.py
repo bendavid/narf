@@ -163,7 +163,7 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
 
     return pyroot_boost_hist
 
-def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled(), var_axis_names = None):
+def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled(), tensor_axis_names = None, tensor_axes = None):
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
     # of the python hist histogram
@@ -179,13 +179,28 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if has_weight:
         traits = ROOT.narf.tensor_traits[coltypes[-1]]
         if traits.is_tensor:
-            if var_axis_names is None:
-                var_axis_names = [f"var_axis_{i}" for i in range(traits.rank)]
-            # weight is a tensor-type, use optimized storage and create additional axes
+            tensor_weight = True
+            # weight is a tensor-type, use optimized storage and use or create additional axes
             # corresponding to tensor indices
-            for size, var_axis_name in zip(traits.get_sizes(), var_axis_names):
-                tensor_weight = True
-                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = var_axis_name))
+            if tensor_axis_names is not None and tensor_axes is not None:
+                raise ValueError("Cannot provide both tensor_axis_names and tensor_axes (provide tensor_axes with axes already containing the desired names instead.)")
+            if tensor_axes is None:
+                # use did not provide axes, generate appropriate ones automatically
+                if tensor_axis_names is None:
+                    tensor_axis_names = [f"var_axis_{i}" for i in range(traits.rank)]
+
+                for size, tensor_axis_name in zip(traits.get_sizes(), tensor_axis_names):
+                    python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = tensor_axis_name))
+            else:
+                # user provided axes, but check them
+                if len(tensor_axes) != traits.rank:
+                    raise ValueError("Wrong number of axes provided")
+                for size, tensor_axis in zip(traits.get_sizes(), tensor_axes):
+                    if tensor_axis.traits.overflow or tensor_axis.traits.underflow:
+                        raise ValueError("Tensor axes cannot have overflow or underflow bins!")
+                    if tensor_axis.size != size:
+                        raise ValueError("Tensor axis must have the same size as the corresponding tensor dimension")
+                    python_axes.append(tensor_axis)
 
 
     _hist = hist.Hist(*python_axes, storage = storage, name = name)
