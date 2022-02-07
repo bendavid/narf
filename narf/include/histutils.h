@@ -55,6 +55,10 @@ namespace narf {
     return make_histogram_with(dense_storage<T>(), std::forward<Axes>(axes)...);
   }
 
+  boost::histogram::axis::variable<> make_variable_axis(const std::vector<double> &edges) {
+    return boost::histogram::axis::variable<>(edges);
+  }
+
   template<typename DFType, typename Helper, typename... ColTypes>
   ROOT::RDF::RResultPtr<typename std::decay_t<Helper>::Result_t>
   book_helper(DFType &df, Helper &&helper, const std::vector<std::string> &colnames) {

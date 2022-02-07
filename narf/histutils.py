@@ -46,7 +46,7 @@ def convert_axis(axis):
 
         return ROOT.boost.histogram.axis.regular["double", default, default, options](nbins, xlow, xhigh)
     elif isinstance(axis, bh.axis.Variable):
-        return ROOT.boost.histogram.axis.variable["double", default, options](axis.edges)
+        return ROOT.narf.make_variable_axis(axis.edges)
     elif isinstance(axis, bh.axis.Integer):
         ilow = axis.bin(0)
         ihigh = axis.bin(axis.size - 1) + 1
