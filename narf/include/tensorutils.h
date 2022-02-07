@@ -17,12 +17,14 @@ namespace narf {
 template <typename T, typename Dimensions_>
 class tensor_accumulator {
 
-private:
+public:
 
   using tensor_t = Eigen::TensorFixedSize<T, Dimensions_>;
 
   template <typename U>
   using weight_t = weight_type<const Eigen::TensorFixedSize<U, Dimensions_>&>;
+
+private:
 
   tensor_t data_;
 
