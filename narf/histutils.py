@@ -58,7 +58,7 @@ def convert_axis(axis):
     elif isinstance(axis, bh.axis.StrCategory):
         ncats = axis.size
         cats = [axis.bin(icat) for icat in range(ncats)]
-        return ROOT.boost.histogram.axis.category[ROOT.std.string, default, options](cats)
+        return ROOT.narf.make_string_category_axis(cats)
     elif isinstance(axis, bh.axis.Boolean):
         return ROOT.boost.histogram.axis.boolean[""]()
     else:

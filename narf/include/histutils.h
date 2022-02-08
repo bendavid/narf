@@ -59,6 +59,10 @@ namespace narf {
     return boost::histogram::axis::variable<>(edges);
   }
 
+  boost::histogram::axis::category<std::string> make_string_category_axis(const std::vector<std::string> &cats) {
+    return boost::histogram::axis::category<std::string>(cats);
+  }
+
   template<typename DFType, typename Helper, typename... ColTypes>
   ROOT::RDF::RResultPtr<typename std::decay_t<Helper>::Result_t>
   book_helper(DFType &df, Helper &&helper, const std::vector<std::string> &colnames) {
