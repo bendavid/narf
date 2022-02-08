@@ -313,8 +313,20 @@ def _convert_root_axis_to_hist(axis, name=None):
         return hist.axis.Regular(nbins, xlow, xhigh, name=name) if name \
                 else hist.axis.Regular(nbins, xlow, xhigh)
     else:
+        nbins = axis.GetNbins()
         edges = [edge for edge in axis.GetXbins()]
-        return hist.axis.Variable(edges, name=name) if name else \
+        # check if this is actually regular
+        edges = np.array(edges, dtype=np.float64)
+        if nbins > 1:
+            maxdiff2 = np.max(np.abs(np.diff(edges, n = 2)))
+            is_regular = maxdiff2/(edges[-1] - edges[0]) < 1e-9
+        else:
+            is_regular = True
+        if is_regular:
+            return hist.axis.Regular(nbins, edges[0], edges[-1], name=name) if name else \
+              hist.axis.Regular(nbins, edges[0], edges[-1])
+        else:
+            return hist.axis.Variable(edges, name=name) if name else \
                 hist.axis.Variable(edges)
 
 def root_to_hist(root_hist, axis_names=None):
