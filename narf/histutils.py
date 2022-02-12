@@ -240,8 +240,11 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     #if tensor_weight:
         #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
         #targsstr = ",".join(targsnames)
-        #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
-        #assert(0)
+        #functemplate = f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);"
+        ##ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+        #print(name)
+        #print(functemplate)
+        ##assert(0)
 
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
 

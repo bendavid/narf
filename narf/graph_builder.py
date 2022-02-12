@@ -1,7 +1,10 @@
 import ROOT
 from .lumitools import make_lumihelper, make_jsonhelper
+import time
 
 def build_and_run(datasets, build_function):
+    time0 = time.time()
+
     results = []
     hweights = []
     evtcounts = []
@@ -56,10 +59,14 @@ def build_and_run(datasets, build_function):
         hweights.append(hweight)
         evtcounts.append(evtcount)
 
+    time_built = time.time()
+
+
     if lumisums:
         print("begin lumi loop")
         ROOT.ROOT.RDF.RunGraphs(lumisums.values())
         print("end lumi loop")
+    time_done_lumi = time.time()
 
     for name, val in lumisums.items():
         print(name, val.GetValue())
@@ -67,8 +74,9 @@ def build_and_run(datasets, build_function):
     print("begin event loop")
     ROOT.ROOT.RDF.RunGraphs(evtcounts)
     print("done event loop")
+    time_done_event = time.time()
 
-    print(results)
+    #print(results)
 
     resultdict = {}
 
@@ -117,5 +125,11 @@ def build_and_run(datasets, build_function):
 
         resultdict[dataset.name] = dsetresult
 
+    time_done = time.time()
+
+    print("narf build graphs:", time_built - time0)
+    print("narf lumi loop:", time_done_lumi - time_built)
+    print("narf event loop:", time_done_event - time_done_lumi)
+    print("narf build results:", time_done - time_done_event)
 
     return resultdict
