@@ -46,7 +46,7 @@ def convert_axis(axis):
 
         return ROOT.boost.histogram.axis.regular["double", default, default, options](nbins, xlow, xhigh)
     elif isinstance(axis, bh.axis.Variable):
-        return ROOT.narf.make_variable_axis(axis.edges)
+        return ROOT.narf.make_variable_axis["double", default, options](axis.edges)
     elif isinstance(axis, bh.axis.Integer):
         ilow = axis.bin(0)
         ihigh = axis.bin(axis.size - 1) + 1
@@ -54,11 +54,11 @@ def convert_axis(axis):
     elif isinstance(axis, bh.axis.IntCategory):
         ncats = axis.size
         cats = [axis.bin(icat) for icat in range(ncats)]
-        return ROOT.boost.histogram.axis.category["int", default, options](cats)
+        return ROOT.narf.make_category_axis["int", default, options](cats)
     elif isinstance(axis, bh.axis.StrCategory):
         ncats = axis.size
         cats = [axis.bin(icat) for icat in range(ncats)]
-        return ROOT.narf.make_string_category_axis(cats)
+        return ROOT.narf.make_category_axis[ROOT.std.string, default, options](cats)
     elif isinstance(axis, bh.axis.Boolean):
         return ROOT.boost.histogram.axis.boolean[""]()
     else:
@@ -243,7 +243,8 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         #functemplate = f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);"
         ##ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
         #print(name)
-        #print(functemplate)
+        #ROOT.gInterpreter.Declare(functemplate)
+        ##print(functemplate)
         ##assert(0)
 
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)

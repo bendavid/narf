@@ -55,12 +55,14 @@ namespace narf {
     return make_histogram_with(dense_storage<T>(), std::forward<Axes>(axes)...);
   }
 
-  boost::histogram::axis::variable<> make_variable_axis(const std::vector<double> &edges) {
-    return boost::histogram::axis::variable<>(edges);
+  template <typename... Args>
+  boost::histogram::axis::variable<Args...> make_variable_axis(const std::vector<double> &edges) {
+    return boost::histogram::axis::variable<Args...>(edges);
   }
 
-  boost::histogram::axis::category<std::string> make_string_category_axis(const std::vector<std::string> &cats) {
-    return boost::histogram::axis::category<std::string>(cats);
+  template <typename... Args>
+  boost::histogram::axis::category<Args...> make_category_axis(const std::vector<std::string> &cats) {
+    return boost::histogram::axis::category<Args...>(cats);
   }
 
   template<typename DFType, typename Helper, typename... ColTypes>
