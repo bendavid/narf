@@ -9,6 +9,13 @@ import functools
 import uuid
 import array
 import cppyy.ll
+import pickle
+import hdf5plugin
+import h5py
+import os
+#import blosc
+
+#blosc.set_nthreads(16)
 
 ROOT.gInterpreter.Declare('#include "histutils.h"')
 ROOT.gInterpreter.Declare('#include "FillBoostHelperAtomic.h"')
@@ -665,3 +672,119 @@ def pythonize_rdataframe(klass):
     klass.Histo3DWithBoost = _histo3d_with_boost
     klass.HistoNDWithBoost = _histond_with_boost
     klass.SumAndCount = _sum_and_count
+
+def hist_to_h5py(hist_hist, h5out, chunks = True, compression="gzip", compression_opts=None):
+    #dset = h5out.create_dataset(hist_hist.name, data = hist_hist.view(flow=True), compression = compression, compression_opts = compression_opts)
+    #print(dset.chunks)
+
+    oldenv = os.environ.get("BLOSC_NTHREADS")
+
+    os.environ["BLOSC_NTHREADS"] = str(os.cpu_count())
+    #os.environ["BLOSC_NTHREADS"] = "16"
+
+    print(oldenv)
+    print(os.environ["BLOSC_NTHREADS"])
+
+    #os.environ["BLOSC_BLOCKSIZE"] = str(512*1024)
+
+    #print(hdf5plugin.Zstd()["compression"])
+    #print(hdf5plugin.Zstd()["compression_opts"])
+
+    print("making ravel")
+    view = hist_hist.view(flow=True).ravel(order="A")
+    print("done ravel")
+
+    itemsize = view.dtype.itemsize
+
+    #max_chunksize = 1*1024*1024*1024
+    max_chunksize = 128*1024*1024
+
+    chunksize = min(16*1024*1024*os.cpu_count(), max_chunksize)//itemsize
+    chunksize = min(chunksize, view.shape[0])
+
+    #dset = h5out.create_dataset(hist_hist.name, shape = view.shape, dtype = view.dtype, chunks = chunks, compression = compression, compression_opts = compression_opts)
+    dset = h5out.create_dataset(hist_hist.name, shape = view.shape, dtype = view.dtype, chunks = (chunksize,), **hdf5plugin.Blosc(cname="lz4"))
+    #dset = h5out.create_dataset(hist_hist.name, shape = view.shape, dtype = view.dtype, chunks = (1002, 1002, 128), **hdf5plugin.LZ4())
+    #dset = h5out.create_dataset(hist_hist.name, shape = view.shape, dtype = view.dtype, chunks=True)
+
+    print(dset.chunks)
+
+    print("packing")
+    #blosc.pack_array(view, cname="lz4")
+    #print("done packing")
+
+
+    #def write_chunk(slices):
+        #blosc.pack_array(view[slices], cname="zstd")
+        ##dset[slices] = view[slices]
+
+    #with concurrent.futures.ThreadPoolExecutor(max_workers = 32) as pool:
+        #results = pool.map(write_chunk, dset.iter_chunks())
+
+    #for res in results:
+        #print(res.result())
+
+    #for slices in dset.iter_chunks():
+        #blosc.pack_array(view[slices], cname="zstd")
+        #dset[slices] = view[slices]
+        #print(chunk)
+
+    #dset[...] = view
+
+    dset.write_direct(view)
+
+    print("done packing")
+
+
+    hist_metadata = { "axes" : tuple(hist_hist.axes),
+                     "storage_type" : hist_hist._storage_type,
+                     "name" : hist_hist.name,
+                     "label" : hist_hist.label,
+                     "metadata" : hist_hist.metadata,
+                     }
+
+    arr = np.array(hist_metadata)
+    #print("metadata arr:", arr.dtype)
+
+    print("write meta")
+    #dset.attrs["hist_metadata"] = arr.astype(h5py.opaque_dtype(arr.dtype))
+    dset.attrs["hist_metadata"] = np.void(pickle.dumps(hist_metadata))
+    print("done meta")
+
+    print(dset.attrs["hist_metadata"].dtype)
+
+    if oldenv is None:
+        del os.environ["BLOSC_NTHREADS"]
+    else:
+        os.environ["BLOSC_NTHREADS"] = oldenv
+
+    return dset
+
+def h5py_to_hist(h5dset):
+    oldenv = os.environ.get("BLOSC_NTHREADS")
+    os.environ["BLOSC_NTHREADS"] = str(os.cpu_count())
+
+    #hist_metadata_raw = h5dset.attrs["hist_metadata"]
+    #print(hist_metadata_raw.tobytes())
+
+    print("dset name", h5dset.name)
+
+    hist_metadata = pickle.loads(h5dset.attrs["hist_metadata"].tobytes())
+
+    hist_hist = hist.Hist(*hist_metadata["axes"],
+                          storage = hist_metadata["storage_type"](),
+                          name = hist_metadata["name"],
+                          label = hist_metadata["label"],
+                          metadata = hist_metadata["metadata"])
+
+    view = hist_hist.view(flow=True).ravel(order="A")
+    #for slices in h5dset.iter_chunks():
+        #view[slices] = h5dset[slices]
+    h5dset.read_direct(view)
+    #hist_hist.view(flow=True)[...] = h5dset[...]
+    if oldenv is None:
+        del os.environ["BLOSC_NTHREADS"]
+    else:
+        os.environ["BLOSC_NTHREADS"] = oldenv
+
+    return hist_hist
