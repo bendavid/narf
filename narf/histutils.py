@@ -110,7 +110,6 @@ def make_array_interface_view(boost_hist):
     strides = view.__array_interface__["strides"]
 
     # compute strides for a fortran-style contiguous array with the given shape
-    # TODO factorize this into a common function
     stridesf = []
     current_stride = elem_size
     for axis_size in shape:
@@ -121,9 +120,11 @@ def make_array_interface_view(boost_hist):
     if strides is None:
         #default stride for C-style contiguous array
         strides = tuple(reversed(stridesf))
+        
+    underflow = [axis.traits.underflow for axis in boost_hist.axes]
 
     acc_type = convert_storage_type(boost_hist._storage_type)
-    arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides)
+    arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides, underflow)
 
     return arrview
 
@@ -135,8 +136,6 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
         tensor_axes = hist_hist.axes[-tensor_rank:]
         tensor_sizes = []
         for axis in tensor_axes:
-            if axis.traits.underflow:
-                raise ValueError("Tensor axes cannot have underflow bins!")
             tensor_sizes.append(axis.size)
 
         scalar_type = ROOT.double
@@ -187,8 +186,6 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
             for idim, (size, tensor_axis) in enumerate(zip(traits.get_sizes(), tensor_axes)):
                 if isinstance(tensor_axis, bh.axis.Axis):
-                    if tensor_axis.traits.underflow:
-                        raise ValueError("Tensor axes cannot have underflow bins!")
                     if tensor_axis.size != size:
                         raise ValueError("Tensor axis must have the same size as the corresponding tensor dimension")
                     python_axes.append(tensor_axis)
@@ -356,29 +353,7 @@ def root_to_hist(root_hist, axis_names=None):
     boost_axes = [_convert_root_axis_to_hist(axis, name) for axis, name in zip(axes, axis_names)]
     boost_hist = hist.Hist(*boost_axes, storage = bh.storage.Weight())
 
-    view = boost_hist.view(flow = True)
-    addr = view.__array_interface__["data"][0]
-    arr = cppyy.ll.reinterpret_cast["void*"](addr)
-
-    elem_size = int(view.__array_interface__["typestr"][2:])
-    shape = view.__array_interface__["shape"]
-    strides = view.__array_interface__["strides"]
-
-    # compute strides for a fortran-style contiguous array with the given shape
-    # TODO factorize this into a common function
-    stridesf = []
-    current_stride = elem_size
-    for axis_size in shape:
-        stridesf.append(current_stride)
-        current_stride *= axis_size
-    stridesf = tuple(stridesf)
-
-    if strides is None:
-        #default stride for C-style contiguous array
-        strides = tuple(reversed(stridesf))
-
-    acc_type = convert_storage_type(boost_hist._storage_type)
-    arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides)
+    arrview = make_array_interface_view(boost_hist)
 
     arrview.from_root(root_hist)
 
@@ -459,32 +434,10 @@ def hist_to_root(boost_hist):
             xlows = array.array("d", xlows)
             xhighs = array.array("d", xhighs)
             root_hist = ROOT.THnT["double"](name, "", len(boost_hist.axes), nbins, xlows, xhighs)
-
-    view = boost_hist.view(flow = True)
-    addr = view.__array_interface__["data"][0]
-    arr = cppyy.ll.reinterpret_cast["void*"](addr)
-
-    elem_size = int(view.__array_interface__["typestr"][2:])
-    shape = view.__array_interface__["shape"]
-    strides = view.__array_interface__["strides"]
-
-    # compute strides for a fortran-style contiguous array with the given shape
-    # TODO factorize this into a common function
-    stridesf = []
-    current_stride = elem_size
-    for axis_size in shape:
-        stridesf.append(current_stride)
-        current_stride *= axis_size
-    stridesf = tuple(stridesf)
-
-    if strides is None:
-        #default stride for C-style contiguous array
-        strides = tuple(reversed(stridesf))
-
-    acc_type = convert_storage_type(boost_hist._storage_type)
-    arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides)
-
-    if ROOT.narf.acc_traits[acc_type].is_weighted_sum:
+    
+    arrview = make_array_interface_view(boost_hist)
+        
+    if arrview.is_weighted_sum():
         root_hist.Sumw2()
 
     arrview.to_root(root_hist)

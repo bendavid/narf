@@ -142,16 +142,16 @@ namespace narf {
     // TODO memcpy cast directly to accumulator types instead of underlying values to avoid hardcoded offsets?
 
   public:
+    
+    static constexpr bool is_weighted_sum() { return acc_traits<T>::is_weighted_sum; }
 
     // TODO handle other index types for constructor?
-    array_interface_view(void *buffer, const std::vector<int> &sizes, const std::vector<int> &strides) :
+    array_interface_view(void *buffer, const std::vector<int> &sizes, const std::vector<int> &strides, const std::vector<bool> &underflow) :
       data_(static_cast<std::byte*>(buffer)) {
 
-        for (std::size_t idim = 0; idim < NDims; ++idim) {
-          sizes_[idim] = sizes[idim];
-          strides_[idim] = strides[idim];
-        }
-
+        std::copy(sizes.begin(), sizes.end(), sizes_.begin());
+        std::copy(strides.begin(), strides.end(), strides_.begin());
+        std::copy(underflow.begin(), underflow.end(), flow_offsets_.begin());
     }
 
     std::ptrdiff_t size() const { return std::accumulate(sizes_.begin(), sizes_.end(), 1, std::multiplies<std::ptrdiff_t>()); }
@@ -170,15 +170,10 @@ namespace narf {
       if constexpr (acc_trait::is_tensor) {
         const auto fillrank = hist.rank();
 
-        std::vector<ptrdiff_t> flow_offsets(fillrank);
-        for (std::size_t idim = 0; idim < fillrank; ++idim) {
-          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
-        }
-
         for (auto&& x: indexed(hist, coverage::all)) {
           std::array<std::ptrdiff_t, rank> idxs;
           for (std::size_t idim = 0; idim < fillrank; ++idim) {
-            idxs[idim] = x.index(idim) + flow_offsets[idim];
+            idxs[idim] = x.index(idim) + flow_offsets_[idim];
           }
 
           auto const &tensor_acc_val = *x;
@@ -186,7 +181,12 @@ namespace narf {
           for (auto it = tensor_acc_val.indices_begin(); it != tensor_acc_val.indices_end(); ++it) {
             const auto tensor_indices = it.indices;
             for (std::size_t idim = fillrank; idim < rank; ++idim) {
-              idxs[idim] = tensor_indices[idim - fillrank];
+              idxs[idim] = tensor_indices[idim - fillrank] + flow_offsets_[idim];
+            }
+            
+            // overflow or underflow bin in the histogram with no corresponding bin in the view
+            if (!in_range(idxs)) {
+              continue;
             }
 
             auto const &acc_val = std::apply(tensor_acc_val.data(), tensor_indices);
@@ -199,15 +199,15 @@ namespace narf {
         }
       }
       else {
-        std::array<ptrdiff_t, rank> flow_offsets;
-        for (std::size_t idim = 0; idim < rank; ++idim) {
-          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
-        }
-
         for (auto&& x: indexed(hist, coverage::all)) {
           std::array<std::ptrdiff_t, rank> idxs;
           for (std::size_t idim = 0; idim < rank; ++idim) {
-            idxs[idim] = x.index(idim) + flow_offsets[idim];
+            idxs[idim] = x.index(idim) + flow_offsets_[idim];
+          }
+          
+          // overflow or underflow bin in the histogram with no corresponding bin in the view
+          if (!in_range(idxs)) {
+            continue;
           }
 
           auto const &acc_val = *x;
@@ -235,15 +235,10 @@ namespace narf {
       if constexpr (acc_trait::is_tensor) {
         const auto fillrank = hist.rank();
 
-        std::vector<ptrdiff_t> flow_offsets(fillrank);
-        for (std::size_t idim = 0; idim < fillrank; ++idim) {
-          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
-        }
-
         for (auto&& x: indexed(hist, coverage::all)) {
           std::array<std::ptrdiff_t, rank> idxs;
           for (std::size_t idim = 0; idim < fillrank; ++idim) {
-            idxs[idim] = x.index(idim) + flow_offsets[idim];
+            idxs[idim] = x.index(idim) + flow_offsets_[idim];
           }
 
           auto &tensor_acc_val = *x;
@@ -251,9 +246,14 @@ namespace narf {
           for (auto it = tensor_acc_val.indices_begin(); it != tensor_acc_val.indices_end(); ++it) {
             const auto tensor_indices = it.indices;
             for (std::size_t idim = fillrank; idim < rank; ++idim) {
-              idxs[idim] = tensor_indices[idim - fillrank];
+              idxs[idim] = tensor_indices[idim - fillrank] + flow_offsets_[idim];
             }
 
+            // overflow or underflow bin in the histogram with no corresponding bin in the view
+            if (!in_range(idxs)) {
+              continue;
+            }
+            
             auto &acc_val = std::apply(tensor_acc_val.data(), tensor_indices);
 
             const std::byte *elem = element_ptr(idxs);
@@ -265,17 +265,17 @@ namespace narf {
         }
       }
       else {
-        std::array<ptrdiff_t, rank> flow_offsets;
-        for (std::size_t idim = 0; idim < rank; ++idim) {
-          flow_offsets[idim] = boost::histogram::axis::traits::options(hist.axis(idim)) & boost::histogram::axis::option::underflow ? 1 : 0;
-        }
-
         for (auto&& x: indexed(hist, coverage::all)) {
           std::array<std::ptrdiff_t, rank> idxs;
           for (std::size_t idim = 0; idim < rank; ++idim) {
-            idxs[idim] = x.index(idim) + flow_offsets[idim];
+            idxs[idim] = x.index(idim) + flow_offsets_[idim];
           }
 
+          // overflow or underflow bin in the histogram with no corresponding bin in the view
+          if (!in_range(idxs)) {
+            continue;
+          }
+          
           auto &acc_val = *x;
 
           const std::byte *elem = element_ptr(idxs);
@@ -303,7 +303,12 @@ namespace narf {
         // different type and might be different size
         std::array<std::ptrdiff_t, NDims> actual_idxs;
         for (std::size_t idim = 0; idim < rank; ++idim) {
-          actual_idxs[idim] = idxs[idim];
+          actual_idxs[idim] = idxs[idim] - 1 + flow_offsets_[idim];
+        }
+        
+        // overflow or underflow bin in the histogram with no corresponding bin in the view
+        if (!in_range(actual_idxs)) {
+          continue;
         }
 
         std::byte *elem = element_ptr(actual_idxs);
@@ -336,7 +341,12 @@ namespace narf {
         // different type and might be different size
         std::array<std::ptrdiff_t, NDims> actual_idxs;
         for (std::size_t idim = 0; idim < rank; ++idim) {
-          actual_idxs[idim] = idxs[idim];
+          actual_idxs[idim] = idxs[idim] - 1 + flow_offsets_[idim];
+        }
+        
+        // overflow or underflow bin in the histogram with no corresponding bin in the view
+        if (!in_range(actual_idxs)) {
+          continue;
         }
 
         const std::byte *elem = element_ptr(actual_idxs);
@@ -357,6 +367,16 @@ namespace narf {
 
 
   private:
+    
+    bool in_range(const std::array<std::ptrdiff_t, NDims> &idxs) const {
+      for (std::size_t idim = 0; idim < NDims; ++idim) {
+        if (idxs[idim] < 0 || idxs[idim] >= sizes_[idim]) {
+          return false;
+        }
+      }
+
+      return true;
+    }
 
     std::ptrdiff_t element_offset(const std::array<std::ptrdiff_t, NDims> &idxs) const {
       std::ptrdiff_t offset = 0;
@@ -377,6 +397,7 @@ namespace narf {
     std::byte *data_;
     std::array<std::ptrdiff_t, NDims> sizes_;
     std::array<std::ptrdiff_t, NDims> strides_;
+    std::array<std::ptrdiff_t, NDims> flow_offsets_;
 
   };
 
