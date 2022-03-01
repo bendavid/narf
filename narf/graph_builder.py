@@ -2,7 +2,7 @@ import ROOT
 from .lumitools import make_lumihelper, make_jsonhelper
 import time
 
-def build_and_run(datasets, build_function):
+def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
     time0 = time.time()
 
     results = []
@@ -19,7 +19,7 @@ def build_and_run(datasets, build_function):
            jsonhelper = make_jsonhelper(dataset.lumi_json)
 
         if dataset.is_data and dataset.lumi_csv is not None:
-            chain = ROOT.TChain("LuminosityBlocks")
+            chain = ROOT.TChain(lumi_tree)
             for fpath in dataset.filepaths:
                 chain.Add(fpath)
             chains.append(chain)
@@ -30,16 +30,16 @@ def build_and_run(datasets, build_function):
             if jsonhelper is not None:
                 print("adding lumi filter")
                 print(jsonhelper)
-                lumidf = lumidf.Filter(jsonhelper, ["run", "luminosityBlock"], "jsonfilter")
+                lumidf = lumidf.Filter(jsonhelper, [run_col, lumi_col], "jsonfilter")
             print("define")
-            lumidf = lumidf.Define("lumival", lumihelper, ["run", "luminosityBlock"])
+            lumidf = lumidf.Define("lumival", lumihelper, [run_col, lumi_col])
             print("sum")
             lumisum = lumidf.Sum("lumival")
             print("add to dict")
             lumisums[dataset.name] = lumisum
 
         print("event chain")
-        chain = ROOT.TChain("Events")
+        chain = ROOT.TChain(event_tree)
         for fpath in dataset.filepaths:
             chain.Add(fpath)
 
@@ -49,7 +49,7 @@ def build_and_run(datasets, build_function):
         print("event df")
         df = ROOT.ROOT.RDataFrame(chain)
         if jsonhelper is not None:
-            df = df.Filter(jsonhelper, ["run", "luminosityBlock"], "jsonhelper")
+            df = df.Filter(jsonhelper, [run_col, lumi_col], "jsonhelper")
 
         evtcount = df.Count()
 
