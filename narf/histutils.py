@@ -162,10 +162,13 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
 
     return pyroot_boost_hist
 
-def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = ROOT.ROOT.IsImplicitMTEnabled(), tensor_axes = None):
+def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = None, tensor_axes = None):
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
     # of the python hist histogram
+
+    if force_atomic is None:
+        force_atomic = ROOT.ROOT.IsImplicitMTEnabled()
 
     #TODO this code can be shared with root histogram version
 
