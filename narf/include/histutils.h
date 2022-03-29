@@ -146,7 +146,7 @@ namespace narf {
     static constexpr bool is_weighted_sum() { return acc_traits<T>::is_weighted_sum; }
 
     // TODO handle other index types for constructor?
-    array_interface_view(void *buffer, const std::vector<int> &sizes, const std::vector<int> &strides, const std::vector<bool> &underflow) :
+    array_interface_view(void *buffer, const std::vector<std::ptrdiff_t> &sizes, const std::vector<std::ptrdiff_t> &strides, const std::vector<bool> &underflow) :
       data_(static_cast<std::byte*>(buffer)) {
 
         std::copy(sizes.begin(), sizes.end(), sizes_.begin());
