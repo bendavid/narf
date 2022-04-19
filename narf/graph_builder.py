@@ -116,6 +116,8 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
 
             elif hasattr(r.GetValue(), "name"):
                 output[r.GetValue().name] = r.GetValue()
+                print("-"*30)
+                print("Dataset " + dataset.name + ": object name = " + r.GetValue().name)
                 print("sum", r.sum())
                 print("sum with overflow", r.sum(flow=True))
             else:
