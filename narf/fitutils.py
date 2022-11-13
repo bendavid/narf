@@ -84,7 +84,8 @@ def fit_hist(hist, func, parmvals, max_iter = 5, edmtol = 1e-5):
            "status" : status,
            "covstatus" : covstatus,
            "hess_eigvals" : eigvals,
-           "edmval" : edmval }
+           "edmval" : edmval,
+           "chisqval" : loss }
 
     return res
 
