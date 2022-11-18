@@ -38,43 +38,51 @@ def val_grad_hessp(func, p, *args, **kwargs):
     return val, grad, hessp
 
 def chisq_loss(parms, xvals, xwidths, yvals, yvariances, func, norm_axes = None):
-    return tf.reduce_sum( (func(xvals, parms) - yvals)**2/yvariances )
+    fvals = func(xvals, parms)
+
+    # exclude zero-variance bins
+    variances_safe = tf.where(yvariances == 0., tf.ones_like(yvariances), yvariances)
+    chisqv = (fvals - yvals)**2/variances_safe
+    chisqv_safe = tf.where(yvariances == 0., tf.zeros_like(chisqv), chisqv)
+    return tf.reduce_sum(chisqv_safe)
 
 def chisq_normalized_loss(parms, xvals, xwidths, yvals, yvariances, func, norm_axes = None):
     fvals = func(xvals, parms)
+    norm = tf.reduce_sum(fvals, keepdims=True, axis = norm_axes)
+    sumw = tf.reduce_sum(yvals, keepdims=True, axis = norm_axes)
     if norm_axes is None:
-        norm = tf.reduce_sum(fvals, keepdims=True)
         for xwidth in xwidths:
             norm *= xwidth
-        sumw = tf.reduce_sum(yvals, keepdims=True)
     else:
-        norm = fvals
-        sumw = yvals
-        for norm_axis, xwidth in zip(norm_axes, xwidths):
-            norm = xwidth*tf.reduce_sum(norm, keepdims=True, axis = norm_axis)
-            sumw = tf.reduce_sum(sumw, keepdims=True, axis = norm_axis)
+        for norm_axis in norm_axes:
+            norm *= xwidths[norm_axis]
             
-    return tf.reduce_sum( (sumw*fvals/norm - yvals)**2/yvariances )
+    # exclude zero-variance bins
+    variances_safe = tf.where(yvariances == 0., tf.ones_like(yvariances), yvariances)
+    chisqv = (sumw*fvals/norm - yvals)**2/variances_safe
+    chisqv_safe = tf.where(yvariances == 0., tf.zeros_like(chisqv), chisqv)
+    return tf.reduce_sum(chisqv_safe)
 
 def nll_loss(parms, xvals, xwidths, yvals, yvariances, func, norm_axes = None):
     fvals = func(xvals, parms)
+    norm = tf.reduce_sum(fvals, keepdims=True, axis = norm_axes)
     if norm_axes is None:
-        norm = tf.reduce_sum(fvals, keepdims=True)
         for xwidth in xwidths:
             norm *= xwidth
     else:
-        norm = fvals
-        for norm_axis, xwidth in zip(norm_axes, xwidths):
-            norm = xwidth*tf.reduce_sum(norm, keepdims=True, axis = norm_axis)
+        for norm_axis in norm_axes:
+            norm *= xwidths[norm_axis]
             
     return -tf.reduce_sum(yvals*tf.math.log(fvals/norm))
 
 def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "chisq", norm_axes = None):
 
-    xvals = [tf.constant(center) for center in hist.axes.centers]
-    xwidths = [tf.constant(width) for width in hist.axes.widths]
-    yvals = tf.constant(hist.values())
-    yvariances = tf.constant(hist.variances())
+    dtype = tf.float64
+
+    xvals = [tf.constant(center, dtype=dtype) for center in hist.axes.centers]
+    xwidths = [tf.constant(width, dtype=dtype) for width in hist.axes.widths]
+    yvals = tf.constant(hist.values(), dtype=dtype)
+    yvariances = tf.constant(hist.variances(), dtype=dtype)
     
     covscale = 1.
     if mode == "chisq":
@@ -84,18 +92,19 @@ def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "
         floss = nll_loss
     elif mode == "chisq_normalized":
         floss = chisq_normalized_loss
+        covscale = 2.
     elif mode == "nll_extended":
         raise Exception("Not Implemented")
     else:
         raise Exception("unsupported mode")
 
     def scipy_loss(parmvals):
-        parms = tf.constant(parmvals)
+        parms = tf.constant(parmvals, dtype=dtype)
         loss, grad = val_grad(floss, parms, xvals, xwidths, yvals, yvariances, func, norm_axes)
         return loss.numpy(), grad.numpy()
 
     def scipy_hessp(parmvals, p):
-        parms = tf.constant(parmvals)
+        parms = tf.constant(parmvals, dtype=dtype)
         loss, grad, hessp = val_grad_hessp(floss, p, parms, xvals, xwidths, yvals, yvariances, func, norm_axes)
         return hessp.numpy()
 
@@ -105,7 +114,7 @@ def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "
 
         current_parmvals = res.x
 
-        parms = tf.constant(current_parmvals)
+        parms = tf.constant(current_parmvals, dtype=dtype)
         loss, grad, hess = val_grad_hess(floss, parms, xvals, xwidths, yvals, yvariances, func, norm_axes)
         loss, grad, hess = loss.numpy(), grad.numpy(), hess.numpy()
         
