@@ -73,7 +73,13 @@ def nll_loss(parms, xvals, xwidths, yvals, yvariances, func, norm_axes = None):
         for norm_axis in norm_axes:
             norm *= xwidths[norm_axis]
             
-    return -tf.reduce_sum(yvals*tf.math.log(fvals/norm))
+    # skip likelihood calculation for empty bins to avoid inf or nan
+    isnull = yvals == 0.
+    fvalsnorm = fvals/norm
+    fvalsnorm_safe = tf.where(isnull, tf.ones_like(fvalsnorm), fvalsnorm)
+    nllv = -yvals*tf.math.log(fvalsnorm_safe)
+    nllv_safe = tf.where(isnull, tf.zeros_like(nllv), nllv)
+    return tf.reduce_sum(nllv_safe)
 
 def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "chisq", norm_axes = None):
 
