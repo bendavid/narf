@@ -345,12 +345,14 @@ namespace narf {
                   }
                }
             }
+            fFillObject.reset();
          }
          else if constexpr (is_array_interface_view<HIST>::value) {
             fObject->from_boost(*fFillObject);
+            fFillObject.reset();
          }
 
-         fFillObject.reset();
+
       }
 
       std::shared_ptr<HIST> GetResultPtr() const {

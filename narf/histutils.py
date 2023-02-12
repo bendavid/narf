@@ -166,7 +166,7 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
 
     return pyroot_boost_hist
 
-def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = None, tensor_axes = None):
+def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = None, tensor_axes = None, convert_to_hist = True):
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
     # of the python hist histogram
@@ -203,10 +203,6 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
                 else:
                     raise TypeError("Invalid type provided for tensor axis")
 
-    _hist = hist.Hist(*python_axes, storage = storage, name = name)
-
-    arrview = make_array_interface_view(_hist)
-
     if tensor_weight:
         # weight is a tensor type, using tensor-storage directly
         tensor_type = coltypes[-1]
@@ -241,7 +237,15 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
 
-    helper = ROOT.narf.FillBoostHelperAtomic[type(arrview), type(hfill)](ROOT.std.move(arrview), ROOT.std.move(hfill))
+
+    if convert_to_hist:
+        _hist = hist.Hist(*python_axes, storage = storage, name = name)
+        arrview = make_array_interface_view(_hist)
+
+        helper = ROOT.narf.FillBoostHelperAtomic[type(arrview), type(hfill)](ROOT.std.move(arrview), ROOT.std.move(hfill))
+    else:
+        helper = ROOT.narf.FillBoostHelperAtomic[type(hfill)](ROOT.std.move(hfill))
+
 
     targs = tuple([type(df), type(helper)] + coltypes)
 
@@ -257,29 +261,31 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
 
-    res._hist = _hist
+    if convert_to_hist:
 
-    # hide underlying C++ class and return the python version instead
+        res._hist = _hist
 
-    res._GetPtr = res.GetPtr
+        # hide underlying C++ class and return the python version instead
 
-    def get_hist():
-        res._GetPtr()
-        return res._hist
+        res._GetPtr = res.GetPtr
 
-    def hist_getitem(*args, **kwargs):
-        res._GetPtr()
-        return res._hist.__getitem__(*args, **kwargs)
+        def get_hist():
+            res._GetPtr()
+            return res._hist
 
-    ret_null = lambda : None
+        def hist_getitem(*args, **kwargs):
+            res._GetPtr()
+            return res._hist.__getitem__(*args, **kwargs)
 
-    res.__deref__ = get_hist
-    res.__follow__ = get_hist
-    res.begin = ret_null
-    res.end = ret_null
-    res.GetPtr = get_hist
-    res.GetValue = get_hist
-    res.__getitem__ = hist_getitem
+        ret_null = lambda : None
+
+        res.__deref__ = get_hist
+        res.__follow__ = get_hist
+        res.begin = ret_null
+        res.end = ret_null
+        res.GetPtr = get_hist
+        res.GetValue = get_hist
+        res.__getitem__ = hist_getitem
 
     return res
 
