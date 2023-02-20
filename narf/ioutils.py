@@ -19,7 +19,7 @@ class H5PickleProxy:
         self.obj = obj
         self.proxied_dset = None
 
-    def GetObject(self):
+    def get(self):
         if self.obj is None:
             if not self.proxied_dset:
                 raise ValueError("Trying to read object from H5PickleProxy but the underlying file has been closed.")
@@ -28,8 +28,11 @@ class H5PickleProxy:
 
         return self.obj
 
+    def release():
+        self.obj = None
+
     def __getstate__(self):
-        self.GetObject()
+        self.get()
 
         current_location = current_state["current_location"]
 
