@@ -47,7 +47,7 @@ class H5PickleProxy:
             if proxied_objects_name in current_location:
                 proxied_objects = current_location[proxied_objects_name]
             else:
-                proxied_objects = current_location.create_group(proxied_objects_name)
+                proxied_objects = current_location.create_group(proxied_objects_name, track_order = True)
 
 
             proxied_dset = pickle_dump_h5py(str(uuid.uuid1()), self.obj, proxied_objects)
@@ -85,7 +85,7 @@ def hist_getstate(obj):
 def hist_setstate(obj, state):
     axes = state.pop("axes")
     storage_type = state.pop("storage_type")
-    bufview, source_sel = state.pop("bufview")
+    bufview = state.pop("bufview")
 
     obj.__init__(*axes, storage = storage_type())
 
@@ -93,13 +93,18 @@ def hist_setstate(obj, state):
         setattr(obj, key, value)
 
     view = obj.view(flow=True).ravel(order="A").view(dtype=np.ubyte)
-    bufview.read_direct(view, source_sel = source_sel)
+    bufview.read_direct(view)
 
 
 def pickle_dump_h5py(name, obj, h5out):
 
+    group = h5out.create_group(name, track_order = True)
+
+    group.attrs["narf_h5py_pickle_protocol_version"] = current_protocol_version
+
+
     original_location = current_state["current_location"]
-    current_state["current_location"] = h5out
+    current_state["current_location"] = group
 
     # dirty hack to work around non-optimized pickling of boost histograms
     getstate_orig = bh.Histogram.__getstate__
@@ -114,80 +119,61 @@ def pickle_dump_h5py(name, obj, h5out):
         current_state["current_location"] = original_location
         bh.Histogram.__getstate__ = getstate_orig
 
-    total_size = len(outbytes)
-    for buf in bufs:
-        total_size += len(buf.raw())
-
     chunksize = 16*1024*1024
-    chunksize = min(chunksize, total_size)
-    chunks = (chunksize,)
 
-    dset = h5out.create_dataset(name, (total_size,), dtype = np.ubyte, chunks = chunks, **hdf5plugin.Blosc(cname="lz4"))
+    arr = np.frombuffer(outbytes, dtype = np.ubyte)
+    chunks = (min(chunksize, arr.shape[0]),)
 
-    outarr = np.frombuffer(outbytes, dtype = np.ubyte)
-    dset.write_direct(outarr, dest_sel = np.s_[:len(outbytes)])
+    dset = group.create_dataset("pickle_data", shape = arr.shape, dtype = arr.dtype, chunks = chunks, **hdf5plugin.Blosc(cname="lz4"), track_order = True)
 
-    bufs_do_h5py_direct_read = []
-    buf_offsets = []
-    offset = len(outbytes)
-    for buf in bufs:
-        buf_offsets.append(offset)
-        size = len(buf.raw())
-        arr = np.frombuffer(buf, dtype = np.ubyte)
-        dset.write_direct(arr, dest_sel = np.s_[offset:offset+size])
+    dset.write_direct(arr)
+
+
+    bufgroup = group.create_group("pickle_buffers", track_order = True)
+    for ibuf, buf in enumerate(bufs):
+        bufarr = np.frombuffer(buf, dtype = np.ubyte)
+        bufchunks = (min(chunksize, bufarr.shape[0]),)
+
+        bufdset = bufgroup.create_dataset(f"buffer_{ibuf}", shape = bufarr.shape, dtype = arr.dtype, chunks=bufchunks, **hdf5plugin.Blosc(cname="lz4"), track_order = True)
+
+        bufdset.write_direct(bufarr)
 
         if buf in bufs_for_h5py_direct_read:
-            bufs_do_h5py_direct_read.append(True)
+            bufdset.attrs["do_h5py_direct_read"] = True
             bufs_for_h5py_direct_read.remove(buf)
         else:
-            bufs_do_h5py_direct_read.append(False)
+            bufdset.attrs["do_h5py_direct_read"] = False
 
-        offset += size
+    return group
 
-    dset.attrs["bufs_do_h5py_direct_read"] = bufs_do_h5py_direct_read
-    dset.attrs["buf_offsets"] = buf_offsets
-    dset.attrs["narf_h5py_pickle_protocol_version"] = current_protocol_version
-
-    return dset
-
-def pickle_load_h5py(dset):
+def pickle_load_h5py(group):
     try:
-        narf_protocol_version = dset.attrs["narf_h5py_pickle_protocol_version"]
+        narf_protocol_version = group.attrs["narf_h5py_pickle_protocol_version"]
     except KeyError:
         raise ValueError("h5py dataset does not contain a python object pickled by narf.")
 
     if narf_protocol_version > current_protocol_version:
         raise ValueError(f"Unsuppported narf protocol version {narf_protocol_version}, maximum supported version is {current_protocol_version}")
 
-    bufs_do_h5py_direct_read = dset.attrs["bufs_do_h5py_direct_read"]
-    buf_offsets = dset.attrs["buf_offsets"]
+    dset = group["pickle_data"]
 
-    if len(buf_offsets) > 0:
-        size = buf_offsets[0]
-        end_offsets = list(buf_offsets[1:])
-        end_offsets.append(dset.shape[0])
-    else:
-        size = dset.shape[0]
-        end_offsets = []
+    inbytes = np.empty(dset.size, dtype = dset.dtype)
+    dset.read_direct(inbytes)
 
-    inbytes = np.empty((size,), dtype = dset.dtype)
-    dset.read_direct(inbytes, source_sel = np.s_[:size])
+    bufgroup = group["pickle_buffers"]
 
     bufs = []
-    for offset, end_offset, do_h5py_direct_read in zip(buf_offsets, end_offsets, bufs_do_h5py_direct_read):
+    for bufdset in bufgroup.values():
+        do_h5py_direct_read = bufdset.attrs["do_h5py_direct_read"]
         if do_h5py_direct_read:
-            # pass the h5py dataset directly to __setstate__ so that it can handle the reading itself
-            # this is needed because boost histograms can't currently adopt the buffer memory for their
-            # internal storage
-            bufs.append((dset, np.s_[offset:end_offset]))
+            bufs.append(bufdset)
         else:
-            buf_size = end_offset - offset
-            bufarr = np.empty((buf_size,), dtype = dset.dtype)
-            dset.read_direct(bufarr, source_sel = np.s_[offset:end_offset])
+            bufarr = np.empty(bufdset.shape, dtype = bufdset.dtype)
+            bufdset.read_direct(bufarr)
             bufs.append(bufarr)
 
     original_location = current_state["current_location"]
-    current_state["current_location"] = dset.parent
+    current_state["current_location"] = group
 
     # dirty hack to work around non-optimized pickling of boost histograms
     setstate_orig = bh.Histogram.__setstate__
@@ -202,18 +188,3 @@ def pickle_load_h5py(dset):
         bh.Histogram.__setstate__ = setstate_orig
 
     return obj
-
-def write_results(results, h5out):
-    for dataset, dsetresult in results.items():
-        dsetgroup = h5out.create_group(dataset)
-
-        for k, v in dsetresult.items():
-            if k == "output":
-                # special handling for output: write each object separately so that they can
-                # be read separately later to save time and memory
-                outputgroup = dsetgroup.create_group(k)
-                for kout, vout in v.items():
-                    pickle_dump_h5py(kout, vout, outputgroup)
-
-            else:
-                pickle_dump_h5py(k, v, dsetgroup)

@@ -1,6 +1,8 @@
 import ROOT
 from .lumitools import make_lumihelper, make_jsonhelper
+from .ioutils import H5PickleProxy
 import time
+import uuid
 
 def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
     time0 = time.time()
@@ -109,19 +111,13 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
 
         for r in res:
             if isinstance(r.GetValue(), ROOT.TNamed):
-              output[r.GetName()] = r.GetValue()
-              #if isinstance(r.GetValue(), ROOT.THnBase):
-                  #print(r.GetSumw())
-                  #print(r.GetSumw2())
-
+                name = r.GetName()
             elif hasattr(r.GetValue(), "name"):
-                output[r.GetValue().name] = r.GetValue()
-                print("-"*30)
-                print("Dataset " + dataset.name + ": object name = " + r.GetValue().name)
-                print("sum", r.sum())
-                print("sum with overflow", r.sum(flow=True))
+                name = r.GetValue().name
             else:
-                output[str(hash(r.GetValue()))] = r.GetValue()
+                name = str(uuid.uuid1())
+
+            output[name] = H5PickleProxy(r.GetValue())
 
         dsetresult["output"] = output
 
