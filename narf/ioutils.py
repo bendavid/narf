@@ -13,6 +13,7 @@ MIN_PROTOCOL_VERSION = 1
 CURRENT_PROTOCOL_VERSION = 1
 
 class H5PickleProxy:
+    """Allows storage of objects in h5py files with lazy reading."""
     def __init__(self, obj, h5group = None):
         self.obj = obj
         self.h5group = h5group
@@ -32,6 +33,13 @@ class H5PickleProxy:
         self.obj = None
 
 class H5Buffer():
+    """Signals out-of-band storage of buffers in h5py files during pickling.
+
+    The corresponding data can later be read back directly from the file using readinto.
+    The provides an efficient mechanism for restoring objects which are not able to adopt
+    external buffers.
+    """
+
     def __init__(self, buf, h5dset = None, readonly = None):
         self.buf = buf
         self.h5dset = h5dset
@@ -60,15 +68,21 @@ class H5Buffer():
         return self.buf
 
     def readinto(self, b, /):
-        bufarr = np.asarray(b)
+        # erase shape, strides and format information of the destination buffer
+        bufarr = np.frombuffer(pickle.PickleBuffer(b).raw(), dtype = np.ubyte)
         if self.buf is None:
+            # no source buffer available, read directly from the h5py dataset
             self.checkdset()
             if self.h5dset.size:
                 self.h5dset.read_direct(bufarr)
             else:
+                # read_direct doesn't work with empty datasets so fall back to slicing.
+                # although this is a null operation it acts as a consistency check on
+                # the destination buffer size'
                 bufarr[...] = self.h5dset[...]
         else:
-            bufarr[...] = self.buf
+            # read from the stored buffer, erasing shape, strides and format information
+            bufarr[...] = pickle.PickleBuffer(self.buf).raw()
 
     def __reduce_ex__(self, protocol):
         if protocol >= 5:
@@ -82,20 +96,25 @@ class H5Buffer():
         return (type(self), (outbuf,))
 
 class H5Path():
+    """Lightweight softlink object storing the path to an h5py group or dataset within an hdf5 file."""
     def __init__(self, path):
         self.path = path
 
-# workaround for suboptimal pickling of bh.Histogram which doesn't properly use the out-of-band-mechanism
+# functions below are a workaround for suboptimal pickling of bh.Histogram
+# which doesn't properly use the out-of-band-mechanism and which can't adopt external buffers
 def get_histogram_view(h):
-    return pickle.PickleBuffer(h.view(flow=True)).raw()
+    """Return a view to the contents of a histogram, suitable for use with PickleBuffer or H5Buffer."""
+    return h.view(flow=True)
 
 def make_Histogram(axes, storage, metadata, h5buf):
+    """Reconstruct a Histogram given constructor arguments and an io-like object with a readinto method."""
     hist_read = bh.Histogram(*axes, storage=storage, metadata=metadata)
     hist_read_view = get_histogram_view(hist_read)
     h5buf.readinto(hist_read_view)
     return hist_read
 
 def reduce_Histogram(obj):
+    """Custom reduction function for Histogram storing the constructor arguments and an H5Buffer of the contents."""
     axes = tuple(obj.axes)
     view = get_histogram_view(obj)
     h5buf = H5Buffer(view)
@@ -103,12 +122,14 @@ def reduce_Histogram(obj):
     return (make_Histogram, (axes, obj.storage_type(), obj.metadata, h5buf) )
 
 def make_Hist(axes, storage, metadata, label, name, h5buf):
+    """Reconstruct a Hist given constructor arguments and an io-like object with a readinto method."""
     hist_read = hist.Hist(*axes, storage=storage, metadata=metadata, label=label, name=name)
     hist_read_view = get_histogram_view(hist_read)
     h5buf.readinto(hist_read_view)
     return hist_read
 
 def reduce_Hist(obj):
+    """Custom reduction function for Hist storing the constructor arguments and an H5Buffer of the contents."""
     axes = tuple(obj.axes)
     view = get_histogram_view(obj)
     h5buf = H5Buffer(view)
@@ -116,6 +137,7 @@ def reduce_Hist(obj):
     return (make_Hist, (axes, obj.storage_type(), obj.metadata, obj.label, obj.name, h5buf) )
 
 class H5IO():
+    """Provides and io-like interface for reading and writing to a resizable h5py dataset."""
     def __init__(self, name, h5out, mode = "r"):
         if mode == "r":
             self.dset = h5out[name]
@@ -129,6 +151,7 @@ class H5IO():
         if type(b) is bytes:
             flat_view = memoryview(b)
         else:
+            # erase shape, strides and format information
             flat_view = pickle.PickleBuffer(b).raw()
 
         oldsize = self.dset.size
@@ -147,14 +170,28 @@ class H5IO():
         raise NotImplementedError("readline is not implemented")
 
     def readinto(self, b, /):
-        arr = np.frombuffer(b, dtype=np.ubyte)
+        # erase shape, strides and format information of the destination buffer
+        arr = np.frombuffer(pickle.PickleBuffer(b).raw(), dtype = np.ubyte)
         nbytes = arr.nbytes
         oldpos = self.pos
         self.pos += nbytes
-        self.dset.read_direct(arr, source_sel = np.s_[oldpos:self.pos])
+        if nbytes:
+            self.dset.read_direct(arr, source_sel = np.s_[oldpos:self.pos])
+        else:
+            # read_direct doesn't work with zero bytes so fall back to slicing.
+            # although this is a null operation it acts as a consistency check on
+            # the destination buffer size'
+            arr[...] = self.dset[...]
+
         return nbytes
 
 class H5Pickler(pickle.Pickler):
+    """Implements pickling to h5py file.
+
+    Includes support for additional out-of-band storage for proxy objects and buffers which need
+    to be read back directly from the file.  h5py groups and datasets can also be stored via H5Path softlink"""
+
+    # use custom dispatch table with custom reduce functions for boost_histogram.Histogram and hist.Hist
     dispatch_table = copyreg.dispatch_table.copy()
     dispatch_table[bh.Histogram] = reduce_Histogram
     dispatch_table[hist.hist.Hist] = reduce_Hist
@@ -165,6 +202,12 @@ class H5Pickler(pickle.Pickler):
         super().__init__(self.io, protocol=protocol)
 
     def reduce_H5PickleProxy(self, proxy):
+        """Custom reduce function for H5PickleProxy.
+
+        The proxied object is written out-of-band from the main pickle stream.
+        The H5PickleProxy object is read back with only the group object where the proxied object can be lazily read back from.
+        """
+
         PROXIED_OBJECTS_NAME = "proxied_objects"
         current_location = self.h5group
 
@@ -179,6 +222,13 @@ class H5Pickler(pickle.Pickler):
         return (type(proxy), (None, proxied_group))
 
     def reduce_H5Buffer(self, h5buf):
+        """Custom reduce function for H5Buffer.
+
+        The corresponding buffer is written out-of-band from the main pickle stream.
+        The H5Buffer object is read back with only the dataset object where the underlying data can
+        be read back when needed (and directly into an existing buffer if desired).
+        """
+
         H5BUFFER_GROUP_NAME = "h5_buffers"
         current_location = self.h5group
 
@@ -202,24 +252,32 @@ class H5Pickler(pickle.Pickler):
             return NotImplemented
 
     def persistent_id(self, obj):
+        """Handle storage of h5py group or dataset as H5Path."""
         if isinstance(obj, h5py.Group) or isinstance(obj, h5py.Dataset):
             return H5Path(obj.name)
         else:
             return None
 
 class H5Unpickler(pickle.Unpickler):
+    """Implements unpickling from an h5py file.
+
+    Includes support for reading back references to h5py groups and datasets stored as H5Path softlinks.
+    """
+
     def __init__(self, h5group):
         self.h5group = h5group
         self.io = H5IO("pickle_data", h5group, mode = "r")
         super().__init__(self.io)
 
     def persistent_load(self, pid):
+        """Handle retrieval of h5py group or dataset via H5Path."""
         if type(pid) is H5Path:
             return self.h5group.file[pid.path]
         else:
             raise pickle.UnpicklingError("unsupported persistent object")
 
 def pickle_dump_h5py(name, obj, h5out):
+    """Write an object to a new h5py group which will be created within the provided group."""
     obj_group = h5out.create_group(name)
     try:
         obj_group.attrs["narf_h5py_pickle_protocol_version"] = CURRENT_PROTOCOL_VERSION
@@ -231,6 +289,7 @@ def pickle_dump_h5py(name, obj, h5out):
     return obj_group
 
 def pickle_load_h5py(h5group):
+    """Load an object from the h5py group which contains it."""
     try:
         narf_protocol_version = h5group.attrs["narf_h5py_pickle_protocol_version"]
     except KeyError:
@@ -239,7 +298,7 @@ def pickle_load_h5py(h5group):
     if narf_protocol_version < MIN_PROTOCOL_VERSION:
         raise ValueError(f"Unsuppported narf protocol version {narf_protocol_version}, minimum supported version is {MIN_PROTOCOL_VERSION}")
     elif narf_protocol_version > CURRENT_PROTOCOL_VERSION:
-        raise ValueError(f"Unsuppported narf protocol version {narf_protocol_version}, maximum supported version is {current_protocol_version}")
+        raise ValueError(f"Unsuppported narf protocol version {narf_protocol_version}, maximum supported version is {CURRENT_PROTOCOL_VERSION}")
 
     unpickler = H5Unpickler(h5group)
     return unpickler.load()
