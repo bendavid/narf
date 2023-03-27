@@ -9,12 +9,13 @@ import functools
 import uuid
 import array
 import cppyy.ll
+import narf.clingutils
 
-ROOT.gInterpreter.Declare('#include "histutils.h"')
-ROOT.gInterpreter.Declare('#include "FillBoostHelperAtomic.h"')
+narf.clingutils.Declare('#include "histutils.h"')
+narf.clingutils.Declare('#include "FillBoostHelperAtomic.h"')
 
-ROOT.gInterpreter.Declare('#include <eigen3/Eigen/Dense>')
-ROOT.gInterpreter.Declare('#include <eigen3/unsupported/Eigen/CXX11/Tensor>')
+narf.clingutils.Declare('#include <eigen3/Eigen/Dense>')
+narf.clingutils.Declare('#include <eigen3/unsupported/Eigen/CXX11/Tensor>')
 
 def bool_to_string(b):
     if b:
@@ -235,7 +236,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     #if arrview.size() != hfill.size():
         #raise ValueError("Mismatched sizes")
 
-    #ROOT.gInterpreter.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
+    #narf.clingutils.Declare(f"template class narf::FillBoostHelperAtomic<{type(h).__cpp_name__}, {type(hfill).__cpp_name__}>;")
 
 
     if convert_to_hist:
@@ -253,9 +254,9 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
         #targsstr = ",".join(targsnames)
         #functemplate = f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);"
-        ##ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+        ##narf.clingutils.Declare(f"template ROOT::RDF::RResultPtr<{type(arrview).__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
         #print(name)
-        #ROOT.gInterpreter.Declare(functemplate)
+        #narf.clingutils.Declare(functemplate)
         ##print(functemplate)
         ##assert(0)
 
@@ -578,7 +579,7 @@ def _histo_with_boost(df, model, cols):
 
     #targsnames = [type(df).__cpp_name__, type(helper).__cpp_name__] + coltypes
     #targsstr = ",".join(targsnames)
-    #ROOT.gInterpreter.Declare(f"template ROOT::RDF::RResultPtr<{hist_type.__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
+    #narf.clingutils.Declare(f"template ROOT::RDF::RResultPtr<{hist_type.__cpp_name__}> narf::book_helper<{targsstr}>({type(df).__cpp_name__}&, {type(helper).__cpp_name__}&&, const std::vector<std::string>&);")
     #assert(0)
 
     res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)

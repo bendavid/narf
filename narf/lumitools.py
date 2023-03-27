@@ -2,8 +2,9 @@ import csv
 import json
 import ROOT
 import pathlib
+import narf.clingutils
 
-ROOT.gInterpreter.Declare('#include "lumitools.h"')
+narf.clingutils.Declare('#include "lumitools.h"')
 
 def make_lumihelper(filename):
     runs = []
