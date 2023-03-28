@@ -155,7 +155,11 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
         python_axes = hist_hist.axes
         cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
 
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
+    # FIXME would like to use std::move to avoid copying the axes but this produces weird jitting errors
+    # revisit this after https://github.com/root-project/root/issues/11854 is resolved to allow
+    # proper debugging
+    # cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
+    cppaxes = [convert_axis(axis) for axis in python_axes]
 
     pyroot_boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
 
@@ -218,7 +222,11 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     else:
         cppstoragetype = convert_storage_type(type(storage), force_atomic = force_atomic)
 
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+    # FIXME would like to use std::move to avoid copying the axes but this produces weird jitting errors
+    # revisit this after https://github.com/root-project/root/issues/11854 is resolved to allow
+    # proper debugging
+    # cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+    cppaxes = [convert_axis(axis) for axis in axes]
 
 
 
