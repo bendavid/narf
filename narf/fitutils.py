@@ -3,6 +3,369 @@ import scipy
 import tensorflow as tf
 import math
 
+from numpy import (zeros, where, diff, floor, minimum, maximum, array, concatenate, logical_or, logical_xor,
+                   sqrt)
+
+def pchip_interpolate(xi, yi, x, axis=0):
+    '''
+        Functionality:
+            1D PCHP interpolation
+        Authors:
+            Michael Taylor <mtaylor@atlanticsciences.com>
+            Mathieu Virbel <mat@meltingrocks.com>
+        Link:
+            https://gist.github.com/tito/553f1135959921ce6699652bf656150d
+            https://github.com/tensorflow/tensorflow/issues/46609#issuecomment-774573667
+    '''
+
+
+    xi_steps = tf.experimental.numpy.diff(xi, axis=axis)
+
+
+    x_steps = tf.experimental.numpy.diff(x, axis=axis)
+
+    idx_zero_constant = tf.constant(0, dtype=tf.int64)
+    float64_zero_constant = tf.constant(0., dtype=tf.float64)
+
+    # x_compare = tf.expand_dims(x, axis=1) < tf.expand_dims(xi, axis=0)
+    x_compare = x[...,None] < xi[..., None, :]
+    x_compare_all = tf.math.reduce_all(x_compare, axis=-1)
+    x_compare_none = tf.math.reduce_all(tf.logical_not(x_compare), axis=-1)
+    x_index = tf.argmax(x_compare, axis = -1) - 1
+
+    x_index = tf.where(x_compare_all, idx_zero_constant, x_index)
+    x_index = tf.where(x_compare_none, tf.constant(xi.shape[axis]-2, dtype=tf.int64), x_index)
+
+    # Calculate gradients d
+    h = tf.experimental.numpy.diff(xi, axis=axis)
+
+    d = tf.zeros_like(xi)
+
+    delta = tf.experimental.numpy.diff(yi, axis=axis) / h
+    # mode=='mono', Fritsch-Carlson algorithm from fortran numerical
+    # recipe
+
+    slice01 = [slice(None)]*len(xi.shape)
+    slice01[axis] = slice(0,1)
+    slice01 = tuple(slice01)
+
+    slice0m1 = [slice(None)]*len(xi.shape)
+    slice0m1[axis] = slice(0,-1)
+    slice0m1 = tuple(slice0m1)
+
+    slice1 = [slice(None)]*len(xi.shape)
+    slice1[axis] = slice(1,None)
+    slice1 = tuple(slice1)
+
+    slicem1 = [slice(None)]*len(xi.shape)
+    slicem1[axis] = slice(-1,None)
+    slicem1 = tuple(slicem1)
+
+    d = tf.concat(
+        (delta[slice01], 3 * (h[slice0m1] + h[slice1]) / ((h[slice0m1] + 2 * h[slice1]) / delta[slice0m1] +
+                                                (2 * h[slice0m1] + h[slice1]) / delta[slice1]), delta[slicem1]), axis=axis)
+
+    false_shape = [*xi.shape]
+    false_shape[axis] = 1
+    false_const = tf.fill(false_shape, False)
+
+    # mask = tf.concat((tf.constant([False]), tf.math.logical_xor(delta[0:-1] > 0, delta[1:] > 0), tf.constant([False])), axis=0)
+    mask = tf.concat((false_const, tf.math.logical_xor(delta[slice0m1] > 0, delta[slice1] > 0), false_const), axis=axis)
+    d = tf.where(mask, float64_zero_constant, d)
+
+    mask = tf.math.logical_or(tf.concat((false_const, delta == 0), axis=axis), tf.concat((delta == 0, false_const), axis=axis))
+    d = tf.where(mask, float64_zero_constant, d)
+
+    dxxi = x - tf.gather(xi, x_index, axis=axis, batch_dims=1)
+    dxxid = x - tf.gather(xi, 1+x_index, axis=axis, batch_dims=1)
+    dxxi2 = tf.math.pow(dxxi, 2)
+    dxxid2 = tf.math.pow(dxxid, 2)
+    yi_xidx = tf.gather(yi, x_index, axis=axis, batch_dims=1)
+    yi_1pxidx = tf.gather(yi, 1+x_index, axis=axis, batch_dims=1)
+    d_xidx = tf.gather(d, x_index, axis=axis, batch_dims=1)
+    d_1pxidx = tf.gather(d, 1+x_index, axis=axis, batch_dims=1)
+    h_xidx = tf.gather(h, x_index, axis=axis, batch_dims=1)
+
+    y = (2 / tf.math.pow(h_xidx, 3) *
+            (yi_xidx * dxxid2 * (dxxi + h_xidx / 2) - yi_1pxidx * dxxi2 *
+            (dxxid - h_xidx / 2)) + 1 / tf.math.pow(h_xidx, 2) *
+            (d_xidx * dxxid2 * dxxi + d_1pxidx * dxxi2 * dxxid))
+
+    return y
+
+def pchip_interpolate_np(xi, yi, x, mode="mono", verbose=False):
+    '''
+        Functionality:
+            1D PCHP interpolation
+        Authors:
+            Michael Taylor <mtaylor@atlanticsciences.com>
+            Mathieu Virbel <mat@meltingrocks.com>
+        Link:
+            https://gist.github.com/tito/553f1135959921ce6699652bf656150d
+    '''
+
+    if mode not in ("mono", "quad"):
+        raise ValueError("Unrecognized mode string")
+
+    # Search for [xi,xi+1] interval for each x
+    xi = xi.astype("double")
+    yi = yi.astype("double")
+
+    x_index = zeros(len(x), dtype="int")
+    xi_steps = diff(xi)
+    if not all(xi_steps > 0):
+        raise ValueError("x-coordinates are not in increasing order.")
+
+    x_steps = diff(x)
+    if xi_steps.max() / xi_steps.min() < 1.000001:
+        # uniform input grid
+        if verbose:
+            print("pchip: uniform input grid")
+        xi_start = xi[0]
+        xi_step = (xi[-1] - xi[0]) / (len(xi) - 1)
+        x_index = minimum(maximum(floor((x - xi_start) / xi_step).astype(int), 0), len(xi) - 2)
+
+        # Calculate gradients d
+        h = (xi[-1] - xi[0]) / (len(xi) - 1)
+        d = zeros(len(xi), dtype="double")
+        if mode == "quad":
+            # quadratic polynomial fit
+            d[[0]] = (yi[1] - yi[0]) / h
+            d[[-1]] = (yi[-1] - yi[-2]) / h
+            d[1:-1] = (yi[2:] - yi[0:-2]) / 2 / h
+        else:
+            # mode=='mono', Fritsch-Carlson algorithm from fortran numerical
+            # recipe
+            delta = diff(yi) / h
+            d = concatenate((delta[0:1], 2 / (1 / delta[0:-1] + 1 / delta[1:]), delta[-1:]))
+            d[concatenate((array([False]), logical_xor(delta[0:-1] > 0, delta[1:] > 0), array([False])))] = 0
+            d[logical_or(concatenate((array([False]), delta == 0)), concatenate(
+                (delta == 0, array([False]))))] = 0
+        # Calculate output values y
+        dxxi = x - xi[x_index]
+        dxxid = x - xi[1 + x_index]
+        dxxi2 = pow(dxxi, 2)
+        dxxid2 = pow(dxxid, 2)
+        y = (2 / pow(h, 3) * (yi[x_index] * dxxid2 * (dxxi + h / 2) - yi[1 + x_index] * dxxi2 *
+                              (dxxid - h / 2)) + 1 / pow(h, 2) *
+             (d[x_index] * dxxid2 * dxxi + d[1 + x_index] * dxxi2 * dxxid))
+    else:
+        # not uniform input grid
+        if (x_steps.max() / x_steps.min() < 1.000001 and x_steps.max() / x_steps.min() > 0.999999):
+            # non-uniform input grid, uniform output grid
+            if verbose:
+                print("pchip: non-uniform input grid, uniform output grid")
+            x_decreasing = x[-1] < x[0]
+            if x_decreasing:
+                x = x[::-1]
+            x_start = x[0]
+            x_step = (x[-1] - x[0]) / (len(x) - 1)
+            x_indexprev = -1
+            for xi_loop in range(len(xi) - 2):
+                x_indexcur = max(int(floor((xi[1 + xi_loop] - x_start) / x_step)), -1)
+                x_index[1 + x_indexprev:1 + x_indexcur] = xi_loop
+                x_indexprev = x_indexcur
+            x_index[1 + x_indexprev:] = len(xi) - 2
+            if x_decreasing:
+                x = x[::-1]
+                x_index = x_index[::-1]
+        elif all(x_steps > 0) or all(x_steps < 0):
+            # non-uniform input/output grids, output grid monotonic
+            if verbose:
+                print("pchip: non-uniform in/out grid, output grid monotonic")
+            x_decreasing = x[-1] < x[0]
+            if x_decreasing:
+                x = x[::-1]
+            x_len = len(x)
+            x_loop = 0
+            for xi_loop in range(len(xi) - 1):
+                while x_loop < x_len and x[x_loop] < xi[1 + xi_loop]:
+                    x_index[x_loop] = xi_loop
+                    x_loop += 1
+            x_index[x_loop:] = len(xi) - 2
+            if x_decreasing:
+                x = x[::-1]
+                x_index = x_index[::-1]
+        else:
+            # non-uniform input/output grids, output grid not monotonic
+            if verbose:
+                print("pchip: non-uniform in/out grids, " "output grid not monotonic")
+            for index in range(len(x)):
+                loc = where(x[index] < xi)[0]
+                if loc.size == 0:
+                    x_index[index] = len(xi) - 2
+                elif loc[0] == 0:
+                    x_index[index] = 0
+                else:
+                    x_index[index] = loc[0] - 1
+        # Calculate gradients d
+        h = diff(xi)
+        d = zeros(len(xi), dtype="double")
+        delta = diff(yi) / h
+        if mode == "quad":
+            # quadratic polynomial fit
+            d[[0, -1]] = delta[[0, -1]]
+            d[1:-1] = (delta[1:] * h[0:-1] + delta[0:-1] * h[1:]) / (h[0:-1] + h[1:])
+        else:
+            # mode=='mono', Fritsch-Carlson algorithm from fortran numerical
+            # recipe
+            d = concatenate(
+                (delta[0:1], 3 * (h[0:-1] + h[1:]) / ((h[0:-1] + 2 * h[1:]) / delta[0:-1] +
+                                                      (2 * h[0:-1] + h[1:]) / delta[1:]), delta[-1:]))
+            d[concatenate((array([False]), logical_xor(delta[0:-1] > 0, delta[1:] > 0), array([False])))] = 0
+            d[logical_or(concatenate((array([False]), delta == 0)), concatenate(
+                (delta == 0, array([False]))))] = 0
+        dxxi = x - xi[x_index]
+        dxxid = x - xi[1 + x_index]
+        dxxi2 = pow(dxxi, 2)
+        dxxid2 = pow(dxxid, 2)
+        y = (2 / pow(h[x_index], 3) *
+             (yi[x_index] * dxxid2 * (dxxi + h[x_index] / 2) - yi[1 + x_index] * dxxi2 *
+              (dxxid - h[x_index] / 2)) + 1 / pow(h[x_index], 2) *
+             (d[x_index] * dxxid2 * dxxi + d[1 + x_index] * dxxi2 * dxxid))
+    return y
+
+
+
+def pchip_interpolate_np_forced(xi, yi, x, mode="mono", verbose=False):
+    '''
+        Functionality:
+            1D PCHP interpolation
+        Authors:
+            Michael Taylor <mtaylor@atlanticsciences.com>
+            Mathieu Virbel <mat@meltingrocks.com>
+        Link:
+            https://gist.github.com/tito/553f1135959921ce6699652bf656150d
+    '''
+
+    if mode not in ("mono", "quad"):
+        raise ValueError("Unrecognized mode string")
+
+    # Search for [xi,xi+1] interval for each x
+    xi = xi.astype("double")
+    yi = yi.astype("double")
+
+    x_index = zeros(len(x), dtype="int")
+    xi_steps = diff(xi)
+    if not all(xi_steps > 0):
+        raise ValueError("x-coordinates are not in increasing order.")
+
+    x_steps = diff(x)
+    # if xi_steps.max() / xi_steps.min() < 1.000001:
+    if False:
+        # uniform input grid
+        if verbose:
+            print("pchip: uniform input grid")
+        xi_start = xi[0]
+        xi_step = (xi[-1] - xi[0]) / (len(xi) - 1)
+        x_index = minimum(maximum(floor((x - xi_start) / xi_step).astype(int), 0), len(xi) - 2)
+
+        # Calculate gradients d
+        h = (xi[-1] - xi[0]) / (len(xi) - 1)
+        d = zeros(len(xi), dtype="double")
+        if mode == "quad":
+            # quadratic polynomial fit
+            d[[0]] = (yi[1] - yi[0]) / h
+            d[[-1]] = (yi[-1] - yi[-2]) / h
+            d[1:-1] = (yi[2:] - yi[0:-2]) / 2 / h
+        else:
+            # mode=='mono', Fritsch-Carlson algorithm from fortran numerical
+            # recipe
+            delta = diff(yi) / h
+            d = concatenate((delta[0:1], 2 / (1 / delta[0:-1] + 1 / delta[1:]), delta[-1:]))
+            d[concatenate((array([False]), logical_xor(delta[0:-1] > 0, delta[1:] > 0), array([False])))] = 0
+            d[logical_or(concatenate((array([False]), delta == 0)), concatenate(
+                (delta == 0, array([False]))))] = 0
+        # Calculate output values y
+        dxxi = x - xi[x_index]
+        dxxid = x - xi[1 + x_index]
+        dxxi2 = pow(dxxi, 2)
+        dxxid2 = pow(dxxid, 2)
+        y = (2 / pow(h, 3) * (yi[x_index] * dxxid2 * (dxxi + h / 2) - yi[1 + x_index] * dxxi2 *
+                              (dxxid - h / 2)) + 1 / pow(h, 2) *
+             (d[x_index] * dxxid2 * dxxi + d[1 + x_index] * dxxi2 * dxxid))
+    else:
+        # not uniform input grid
+        # if (x_steps.max() / x_steps.min() < 1.000001 and x_steps.max() / x_steps.min() > 0.999999):
+        if False:
+            # non-uniform input grid, uniform output grid
+            if verbose:
+                print("pchip: non-uniform input grid, uniform output grid")
+            x_decreasing = x[-1] < x[0]
+            if x_decreasing:
+                x = x[::-1]
+            x_start = x[0]
+            x_step = (x[-1] - x[0]) / (len(x) - 1)
+            x_indexprev = -1
+            for xi_loop in range(len(xi) - 2):
+                x_indexcur = max(int(floor((xi[1 + xi_loop] - x_start) / x_step)), -1)
+                x_index[1 + x_indexprev:1 + x_indexcur] = xi_loop
+                x_indexprev = x_indexcur
+            x_index[1 + x_indexprev:] = len(xi) - 2
+            if x_decreasing:
+                x = x[::-1]
+                x_index = x_index[::-1]
+        # elif all(x_steps > 0) or all(x_steps < 0):
+        elif True:
+            # non-uniform input/output grids, output grid monotonic
+            if verbose:
+                print("pchip: non-uniform in/out grid, output grid monotonic")
+            # x_decreasing = x[-1] < x[0]
+            x_decreasing = False
+            if x_decreasing:
+                x = x[::-1]
+            x_len = len(x)
+            x_loop = 0
+            for xi_loop in range(len(xi) - 1):
+                while x_loop < x_len and x[x_loop] < xi[1 + xi_loop]:
+                    x_index[x_loop] = xi_loop
+                    x_loop += 1
+            x_index[x_loop:] = len(xi) - 2
+
+            print("np_forced x_index", x_index)
+            if x_decreasing:
+                x = x[::-1]
+                x_index = x_index[::-1]
+        else:
+            # non-uniform input/output grids, output grid not monotonic
+            if verbose:
+                print("pchip: non-uniform in/out grids, " "output grid not monotonic")
+            for index in range(len(x)):
+                loc = where(x[index] < xi)[0]
+                if loc.size == 0:
+                    x_index[index] = len(xi) - 2
+                elif loc[0] == 0:
+                    x_index[index] = 0
+                else:
+                    x_index[index] = loc[0] - 1
+        # Calculate gradients d
+        h = diff(xi)
+        d = zeros(len(xi), dtype="double")
+        delta = diff(yi) / h
+        if mode == "quad":
+            # quadratic polynomial fit
+            d[[0, -1]] = delta[[0, -1]]
+            d[1:-1] = (delta[1:] * h[0:-1] + delta[0:-1] * h[1:]) / (h[0:-1] + h[1:])
+        else:
+            # mode=='mono', Fritsch-Carlson algorithm from fortran numerical
+            # recipe
+            d = concatenate(
+                (delta[0:1], 3 * (h[0:-1] + h[1:]) / ((h[0:-1] + 2 * h[1:]) / delta[0:-1] +
+                                                      (2 * h[0:-1] + h[1:]) / delta[1:]), delta[-1:]))
+            d[concatenate((array([False]), logical_xor(delta[0:-1] > 0, delta[1:] > 0), array([False])))] = 0
+            d[logical_or(concatenate((array([False]), delta == 0)), concatenate(
+                (delta == 0, array([False]))))] = 0
+        dxxi = x - xi[x_index]
+        dxxid = x - xi[1 + x_index]
+        dxxi2 = pow(dxxi, 2)
+        dxxid2 = pow(dxxid, 2)
+        y = (2 / pow(h[x_index], 3) *
+             (yi[x_index] * dxxid2 * (dxxi + h[x_index] / 2) - yi[1 + x_index] * dxxi2 *
+              (dxxid - h[x_index] / 2)) + 1 / pow(h[x_index], 2) *
+             (d[x_index] * dxxid2 * dxxi + d[1 + x_index] * dxxi2 * dxxid))
+    return y
+
+
 @tf.function
 def val_grad(func, *args, **kwargs):
     xdep = args[0]
@@ -102,9 +465,22 @@ def nll_loss(parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes =
 def nll_loss_bin_integrated(parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes = None, *args):
     #TODO reduce code duplication with nll_loss_bin
 
-    #FIXME this is only defined in 1D for now
-    cdfvals = func(xedges, parms, *args)
-    bin_integrals = cdfvals[1:] - cdfvals[:-1]
+    norm_axis = 0
+    if norm_axes is not None:
+        if len(norm_axes) > 1:
+            raise ValueError("Only 1 nomralization access supported for bin-integrated nll")
+        norm_axis = norm_axes[0]
+
+    cdfvals = func(xvals, xedges, parms, *args)
+
+    slices_low = [slice(None)]*len(cdfvals.shape)
+    slices_low[norm_axis] = slice(None,-1)
+
+    slices_high = [slice(None)]*len(cdfvals.shape)
+    slices_high[norm_axis] = slice(1,None)
+
+    # bin_integrals = cdfvals[1:] - cdfvals[:-1]
+    bin_integrals = cdfvals[tuple(slices_high)] - cdfvals[tuple(slices_low)]
     bin_integrals = tf.maximum(bin_integrals, tf.zeros_like(bin_integrals))
 
     fvals = bin_integrals
