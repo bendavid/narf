@@ -52,8 +52,8 @@ def func_cdf(xvals, xedges, parms):
     parms_slope = parms_slope[None, :]
 
     quants = tf.constant(quantvals, dtype=tf.float64)
-    # quants = quants*tf.ones_like(xvals[0])
-    quants = quants[None, :]
+    quants = quants*tf.ones_like(xvals[0])
+    # quants = quants[None, :]
 
     x0 = tf.constant(xmin, dtype=tf.float64)
     x0 = tf.reshape(x0, (1,1))
