@@ -6,7 +6,7 @@ import math
 from numpy import (zeros, where, diff, floor, minimum, maximum, array, concatenate, logical_or, logical_xor,
                    sqrt)
 
-def pchip_interpolate(xi, yi, x, axis=0):
+def pchip_interpolate(xi, yi, x, axis=-1):
     '''
         Functionality:
             1D PCHP interpolation
@@ -18,6 +18,18 @@ def pchip_interpolate(xi, yi, x, axis=0):
             https://github.com/tensorflow/tensorflow/issues/46609#issuecomment-774573667
     '''
 
+    tensors = [xi, yi]
+    nelems = [tensor.shape.num_elements() for tensor in tensors]
+
+    max_nelems = max(nelems)
+    broadcast_shape = tensors[nelems.index(max_nelems)].shape
+
+    ndim = len(broadcast_shape)
+
+    if xi.shape.num_elements() < max_nelems:
+        xi = tf.broadcast_to(xi, broadcast_shape)
+    if yi.shape.num_elements() < max_nelems:
+        yi = tf.broadcast_to(yi, broadcast_shape)
 
     xi_steps = tf.experimental.numpy.diff(xi, axis=axis)
 
@@ -27,7 +39,6 @@ def pchip_interpolate(xi, yi, x, axis=0):
     idx_zero_constant = tf.constant(0, dtype=tf.int64)
     float64_zero_constant = tf.constant(0., dtype=tf.float64)
 
-    # x_compare = tf.expand_dims(x, axis=1) < tf.expand_dims(xi, axis=0)
     x_compare = x[...,None] < xi[..., None, :]
     x_compare_all = tf.math.reduce_all(x_compare, axis=-1)
     x_compare_none = tf.math.reduce_all(tf.logical_not(x_compare), axis=-1)
@@ -45,19 +56,19 @@ def pchip_interpolate(xi, yi, x, axis=0):
     # mode=='mono', Fritsch-Carlson algorithm from fortran numerical
     # recipe
 
-    slice01 = [slice(None)]*len(xi.shape)
+    slice01 = [slice(None)]*ndim
     slice01[axis] = slice(0,1)
     slice01 = tuple(slice01)
 
-    slice0m1 = [slice(None)]*len(xi.shape)
+    slice0m1 = [slice(None)]*ndim
     slice0m1[axis] = slice(0,-1)
     slice0m1 = tuple(slice0m1)
 
-    slice1 = [slice(None)]*len(xi.shape)
+    slice1 = [slice(None)]*ndim
     slice1[axis] = slice(1,None)
     slice1 = tuple(slice1)
 
-    slicem1 = [slice(None)]*len(xi.shape)
+    slicem1 = [slice(None)]*ndim
     slicem1[axis] = slice(-1,None)
     slicem1 = tuple(slicem1)
 
@@ -69,22 +80,52 @@ def pchip_interpolate(xi, yi, x, axis=0):
     false_shape[axis] = 1
     false_const = tf.fill(false_shape, False)
 
-    # mask = tf.concat((tf.constant([False]), tf.math.logical_xor(delta[0:-1] > 0, delta[1:] > 0), tf.constant([False])), axis=0)
     mask = tf.concat((false_const, tf.math.logical_xor(delta[slice0m1] > 0, delta[slice1] > 0), false_const), axis=axis)
     d = tf.where(mask, float64_zero_constant, d)
 
     mask = tf.math.logical_or(tf.concat((false_const, delta == 0), axis=axis), tf.concat((delta == 0, false_const), axis=axis))
     d = tf.where(mask, float64_zero_constant, d)
 
-    dxxi = x - tf.gather(xi, x_index, axis=axis, batch_dims=1)
-    dxxid = x - tf.gather(xi, 1+x_index, axis=axis, batch_dims=1)
+    # permutation to move the selected axis to the end
+    selaxis = axis
+    if selaxis < 0:
+        selaxis = ndim + selaxis
+    permfwd = list(range(ndim))
+    permfwd.remove(selaxis)
+    permfwd.append(selaxis)
+
+    # reverse permutation to restore the original axis order
+    permrev = list(range(ndim))
+    permrev.remove(ndim-1)
+    permrev.insert(selaxis, ndim-1)
+
+    xiperm = tf.transpose(xi, perm=permfwd)
+    yiperm = tf.transpose(yi, perm=permfwd)
+    dperm = tf.transpose(d, perm=permfwd)
+    hperm = tf.transpose(h, perm=permfwd)
+
+    nbatch = ndim - 1
+
+    xi_xidx = tf.gather(xiperm, x_index, axis=-1, batch_dims=nbatch)
+    xi_1pxidx = tf.gather(xiperm, 1 + x_index, axis=-1, batch_dims=nbatch)
+    yi_xidx = tf.gather(yiperm, x_index, axis=-1, batch_dims=nbatch)
+    yi_1pxidx = tf.gather(yiperm, 1 + x_index, axis=-1, batch_dims=nbatch)
+    d_xidx = tf.gather(dperm, x_index, axis=-1, batch_dims=nbatch)
+    d_1pxidx = tf.gather(dperm, 1 + x_index, axis=-1, batch_dims=nbatch)
+    h_xidx = tf.gather(hperm, x_index, axis=-1, batch_dims=nbatch)
+
+    xi_xidx = tf.transpose(xi_xidx, perm=permrev)
+    xi_1pxidx = tf.transpose(xi_1pxidx, perm=permrev)
+    yi_xidx = tf.transpose(yi_xidx, perm=permrev)
+    yi_1pxidx = tf.transpose(yi_1pxidx, perm=permrev)
+    d_xidx = tf.transpose(d_xidx, perm=permrev)
+    d_1pxidx = tf.transpose(d_1pxidx, perm=permrev)
+    h_xidx = tf.transpose(h_xidx, perm=permrev)
+
+    dxxi = x - xi_xidx
+    dxxid = x - xi_1pxidx
     dxxi2 = tf.math.pow(dxxi, 2)
     dxxid2 = tf.math.pow(dxxid, 2)
-    yi_xidx = tf.gather(yi, x_index, axis=axis, batch_dims=1)
-    yi_1pxidx = tf.gather(yi, 1+x_index, axis=axis, batch_dims=1)
-    d_xidx = tf.gather(d, x_index, axis=axis, batch_dims=1)
-    d_1pxidx = tf.gather(d, 1+x_index, axis=axis, batch_dims=1)
-    h_xidx = tf.gather(h, x_index, axis=axis, batch_dims=1)
 
     y = (2 / tf.math.pow(h_xidx, 3) *
             (yi_xidx * dxxid2 * (dxxi + h_xidx / 2) - yi_1pxidx * dxxi2 *
@@ -365,10 +406,85 @@ def pchip_interpolate_np_forced(xi, yi, x, mode="mono", verbose=False):
              (d[x_index] * dxxid2 * dxxi + d[1 + x_index] * dxxi2 * dxxid))
     return y
 
+def qparms_to_quantiles(qparms, x_low = 0., x_high = 1., axis = -1):
+    deltax = tf.exp(qparms)
+    sumdeltax = tf.math.reduce_sum(deltax, axis=axis, keepdims=True)
+
+    deltaxnorm = deltax/sumdeltax
+
+    x0shape = list(deltaxnorm.shape)
+    x0shape[axis] = 1
+    x0 = tf.fill(x0shape, x_low)
+
+    deltaxfull = (x_high - x_low)*deltaxnorm
+    deltaxfull = tf.concat([x0, deltaxfull], axis = axis)
+
+    quants = tf.cumsum(deltaxfull, axis=axis)
+
+    return quants
+
+
+
+def quantiles_to_qparms(quants, x_low = 0., x_high = 1., axis = -1):
+
+    deltaxfull = tf.experimental.numpy.diff(quants, axis=axis)
+    deltaxnorm = deltaxfull/(x_high - x_low)
+    qparms = tf.log(deltaxnorm)
+
+    return qparms
+
+
+def hist_to_quantiles(h, quant_cdfvals, axis = -1):
+    dtype = tf.float64
+
+    xvals = [tf.constant(center, dtype=dtype) for center in h.axes.centers]
+    xwidths = [tf.constant(width, dtype=dtype) for width in h.axes.widths]
+    xedges = [tf.constant(edge, dtype=dtype) for edge in h.axes.edges]
+    yvals = tf.constant(h.values(), dtype=dtype)
+
+    if not isinstance(quant_cdfvals, tf.Tensor):
+        quant_cdfvals = tf.constant(quant_cdfvals, tf.float64)
+
+    x_flat = tf.reshape(xedges[axis], (-1,))
+    x_low = x_flat[0]
+    x_high = x_flat[-1]
+
+    hist_cdfvals = tf.cumsum(yvals, axis=axis)/tf.reduce_sum(yvals, axis=axis, keepdims=True)
+
+    x0shape = list(hist_cdfvals.shape)
+    x0shape[axis] = 1
+    x0 = tf.zeros(x0shape, dtype = dtype)
+
+    hist_cdfvals = tf.concat([x0, hist_cdfvals], axis=axis)
+
+    quants = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals)
+
+    quants = tf.where(quant_cdfvals == 0., x_low, quants)
+    quants = tf.where(quant_cdfvals == 1., x_high, quants)
+
+    return quants.numpy()
+
+def func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=-1):
+    x_flat = tf.reshape(xedges[axis], (-1,))
+    x_low = x_flat[0]
+    x_high = x_flat[-1]
+
+    quants = qparms_to_quantiles(qparms, x_low = x_low, x_high = x_high, axis = axis)
+
+    spline_edges = xedges[axis]
+
+    cdfvals = pchip_interpolate(quants, quant_cdfvals, spline_edges, axis=axis)
+
+    return cdfvals
+
+def func_constraint_for_quantile_fit(xvals, xedges, qparms, axis=-1):
+    constraints = 0.5*tf.math.square(tf.math.reduce_sum(tf.exp(qparms), axis=axis) - 1.)
+    constraint = tf.math.reduce_sum(constraints)
+    return constraint
 
 @tf.function
 def val_grad(func, *args, **kwargs):
-    xdep = args[0]
+    xdep = kwargs["parms"]
     with tf.GradientTape() as t1:
         t1.watch(xdep)
         val = func(*args, **kwargs)
@@ -378,7 +494,7 @@ def val_grad(func, *args, **kwargs):
 #TODO forward-over-reverse also here?
 @tf.function
 def val_grad_hess(func, *args, **kwargs):
-    xdep = args[0]
+    xdep = kwargs["parms"]
     with tf.GradientTape() as t2:
         t2.watch(xdep)
         with tf.GradientTape() as t1:
@@ -391,7 +507,7 @@ def val_grad_hess(func, *args, **kwargs):
 
 @tf.function
 def val_grad_hessp(func, p, *args, **kwargs):
-    xdep = args[0]
+    xdep = kwargs["parms"]
     with tf.autodiff.ForwardAccumulator(xdep, p) as acc:
         with tf.GradientTape() as grad_tape:
             grad_tape.watch(xdep)
@@ -400,6 +516,13 @@ def val_grad_hessp(func, p, *args, **kwargs):
     hessp = acc.jvp(grad)
   
     return val, grad, hessp
+
+def loss_with_constraint(func_loss, parms, func_constraint = None, args_loss = (), extra_args_loss=(), args_constraint = (), extra_args_constraint = ()):
+    loss = func_loss(parms, *args_loss, *extra_args_loss)
+    if func_constraint is not None:
+        loss += func_constraint(*args_constraint, parms, *extra_args_constraint)
+
+    return loss
 
 def chisq_loss(parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes = None, *args):
     fvals = func(xvals, parms, *args)
@@ -528,7 +651,7 @@ def chisq_loss_bin_integrated(parms, xvals, xwidths, xedges, yvals, yvariances, 
     return chisqsum
 
 
-def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "chisq", norm_axes = None, args = ()):
+def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "chisq", norm_axes = None, func_constraint = None,  args = (), args_constraint=()):
 
     dtype = tf.float64
 
@@ -537,7 +660,7 @@ def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "
     xedges = [tf.constant(edge, dtype=dtype) for edge in hist.axes.edges]
     yvals = tf.constant(hist.values(), dtype=dtype)
     yvariances = tf.constant(hist.variances(), dtype=dtype)
-    
+
     covscale = 1.
     if mode == "chisq":
         floss = chisq_loss
@@ -557,14 +680,25 @@ def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "
     else:
         raise Exception("unsupported mode")
 
+    val_grad_args = { "func_loss" : floss,
+                    "func_constraint" : func_constraint,
+                    "args_loss" : (xvals, xwidths, xedges, yvals, yvariances, func, norm_axes),
+                    "extra_args_loss" : args,
+                    "args_constraint" : (xvals, xedges),
+                    "extra_args_constraint" : args_constraint}
+
     def scipy_loss(parmvals, *args):
         parms = tf.constant(parmvals, dtype=dtype)
-        loss, grad = val_grad(floss, parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes, *args)
+
+        # loss, grad = val_grad(floss, parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes, *args)
+        loss, grad = val_grad(loss_with_constraint, parms=parms, **val_grad_args)
         return loss.numpy(), grad.numpy()
 
     def scipy_hessp(parmvals, p, *args):
         parms = tf.constant(parmvals, dtype=dtype)
-        loss, grad, hessp = val_grad_hessp(floss, p, parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes, *args)
+
+        # loss, grad, hessp = val_grad_hessp(floss, p, parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes, *args)
+        loss, grad, hessp = val_grad_hessp(loss_with_constraint, p, parms=parms, **val_grad_args)
         return hessp.numpy()
 
     current_parmvals = initial_parmvals
@@ -575,7 +709,9 @@ def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "
         current_parmvals = res.x
 
         parms = tf.constant(current_parmvals, dtype=dtype)
-        loss, grad, hess = val_grad_hess(floss, parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes, *args)
+
+        # loss, grad, hess = val_grad_hess(floss, parms, xvals, xwidths, xedges, yvals, yvariances, func, norm_axes, *args)
+        loss, grad, hess = val_grad_hess(loss_with_constraint, parms=parms, **val_grad_args)
         loss, grad, hess = loss.numpy(), grad.numpy(), hess.numpy()
         
         try:
