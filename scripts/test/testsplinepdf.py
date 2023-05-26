@@ -25,35 +25,12 @@ htest.fill(rgaus)
 print(htest)
 
 
-xmin = -5.
-xmax = 5.
 
-quantvals = [0.0, 1e-3, 0.02, 0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.98, 1.0-1e-3, 1.0]
-nquants = len(quantvals)
+quant_cdfvals = tf.constant([0.0, 1e-3, 0.02, 0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.98, 1.0-1e-3, 1.0], tf.float64)
+nquants = quant_cdfvals.shape.num_elements()
 
 
-def func_cdf(xvals, xedges, parms):
-
-    quants = tf.constant(quantvals, dtype=tf.float64)
-
-    x0 = tf.constant(xmin, dtype=tf.float64)
-    deltax = tf.concat([[x0], tf.exp(parms)], axis=0)
-
-    xquants = tf.cumsum(deltax)
-
-
-    print("xquants", xquants)
-    print("quants", quants)
-    print("xedges[1]", xedges[0])
-
-    cdfvals = narf.fitutils.pchip_interpolate(xquants, quants, xedges[0])
-
-    print("cdfvals", cdfvals)
-
-
-    return cdfvals
-
-
+func_cdf = narf.fitutils.func_cdf_for_quantile_fit
 
 #this is just for plotting
 def func_pdf(h, parms):
@@ -63,7 +40,7 @@ def func_pdf(h, parms):
 
     tfparms = tf.constant(parms)
 
-    cdf = func_cdf(xvals, xedges, tfparms)
+    cdf = func_cdf(xvals, xedges, tfparms, quant_cdfvals)
 
     pdf = cdf[1:] - cdf[:-1]
     pdf = tf.maximum(pdf, tf.zeros_like(pdf))
@@ -73,9 +50,9 @@ def func_pdf(h, parms):
 nparms = nquants-1
 
 
-initial_parms = np.array([np.log((xmax-xmin)/nparms)]*nparms)
+initial_parms = np.array([np.log(1./nparms)]*nparms)
 
-res = narf.fitutils.fit_hist(htest, func_cdf, initial_parms, mode="nll_bin_integrated")
+res = narf.fitutils.fit_hist(htest, func_cdf, initial_parms, mode="nll_bin_integrated", func_constraint=narf.fitutils.func_constraint_for_quantile_fit, args = (quant_cdfvals,))
 
 print(res)
 
@@ -87,11 +64,11 @@ pdfvals = func_pdf(htest, parmvals)
 pdfvals *= htest.sum()/np.sum(pdfvals)
 
 #
-# plot = plt.figure()
-# htest.plot()
-# plt.plot(htest.axes[0].centers, pdfvals)
-# # plt.show()
-# plot.savefig("test.png")
+plot = plt.figure()
+htest.plot()
+plt.plot(htest.axes[0].centers, pdfvals)
+# plt.show()
+plot.savefig("test.png")
 
 
 

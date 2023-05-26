@@ -24,7 +24,7 @@ data[:,1] = -0.1 + 0.1*data[:,0] + (1. + 0.2*data[:,0])*data[:,1]
 # print(rgaus.dtype)
 # print(rgaus)
 
-axis0 = hist.axis.Regular(100, 0., 1., name="pt")
+axis0 = hist.axis.Regular(50, 0., 1., name="pt")
 axis1 = hist.axis.Regular(100, -5., 5., name="recoil")
 
 htest = hist.Hist(axis0, axis1)
@@ -34,47 +34,45 @@ htest.fill(data[:,0], data[:, 1])
 
 
 
-xmin = -5.
-xmax = 5.
 
-quantvals = [0.0, 1e-3, 0.02, 0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.98, 1.0-1e-3, 1.0]
-nquants = len(quantvals)
+quant_cdfvals = tf.constant([0.0, 1e-3, 0.02, 0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.98, 1.0-1e-3, 1.0], dtype = tf.float64)
+nquants = quant_cdfvals.shape.num_elements()
+
+print("nquants", nquants)
+
+#cdf is in terms of axis1, so shapes need to be compatible
+quant_cdfvals = quant_cdfvals[None, :]
 
 
-def func_cdf(xvals, xedges, parms):
+# get quantiles from histogram, e.g. to help initialize the parameters for the fit (not actually used here)
+
+hist_quantiles = narf.fitutils.hist_to_quantiles(htest, quant_cdfvals, axis=1)
+
+print(hist_quantiles)
+
+def parms_to_qparms(xvals, parms):
 
     parms_2d = tf.reshape(parms, (-1, 2))
     parms_const = parms_2d[:,0]
     parms_slope = parms_2d[:,1]
 
-    #cdf is in terms of axis1 not axis0!
+    #cdf is in terms of axis1, so shapes need to be compatible
     parms_const = parms_const[None, :]
     parms_slope = parms_slope[None, :]
 
-    quants = tf.constant(quantvals, dtype=tf.float64)
-    quants = quants*tf.ones_like(xvals[0])
-    # quants = quants[None, :]
+    qparms = parms_const + parms_slope*xvals[0]
 
-    x0 = tf.constant(xmin, dtype=tf.float64)
-    x0 = tf.reshape(x0, (1,1))
-    deltax = tf.concat([x0*tf.ones_like(xvals[0]), tf.exp(parms_const + parms_slope*xvals[0])], axis=1)
-
-    xquants = tf.cumsum(deltax, axis=1)
-
-    print("xquants", xquants)
-    print("quants", quants)
-    print("xedges[1]", xedges[1])
-
-    # spline_edges = xedges[1]*tf.ones_like(xvals[0])
-    spline_edges = xedges[1]
-
-    cdfvals = narf.fitutils.pchip_interpolate(xquants, quants, spline_edges, axis=1)
-
-    print("cdfvals", cdfvals)
-
-    return cdfvals
+    return qparms
 
 
+
+def func_cdf(xvals, xedges, parms):
+    qparms = parms_to_qparms(xvals, parms)
+    return narf.fitutils.func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=1)
+
+def func_constraint(xvals, xedges, parms):
+    qparms = parms_to_qparms(xvals, parms)
+    return narf.fitutils.func_constraint_for_quantile_fit(xvals, xedges, qparms)
 
 #this is just for plotting
 def func_pdf(h, parms):
@@ -94,13 +92,17 @@ def func_pdf(h, parms):
 nparms = nquants-1
 
 
-initial_parms_const = np.array([np.log((xmax-xmin)/nparms)]*nparms)
+# print("edges", htest.edges)
+
+# assert(0)
+
+initial_parms_const = np.array([np.log(1./nparms)]*nparms)
 initial_parms_slope = np.zeros_like(initial_parms_const)
 
 initial_parms = np.stack([initial_parms_const, initial_parms_slope], axis=-1)
 initial_parms = np.reshape(initial_parms, (-1,))
 
-res = narf.fitutils.fit_hist(htest, func_cdf, initial_parms, mode="nll_bin_integrated", norm_axes=[1])
+res = narf.fitutils.fit_hist(htest, func_cdf, initial_parms, mode="nll_bin_integrated", norm_axes=[1], func_constraint=func_constraint)
 
 print(res)
 
