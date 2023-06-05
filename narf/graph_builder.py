@@ -5,7 +5,10 @@ import time
 import uuid
 import sys
 
-def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
+def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock",
+        scale_xsc_lumi=False, 
+        groups_to_aggregate=[]
+    ):
 
     # TODO make this check more robust and move it to a more appropriate place
     if hasattr(ROOT, "Eigen") and ("tensorflow" in sys.modules or "jax" in sys.modules):
@@ -88,6 +91,9 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
 
     resultdict = {}
 
+    output_group = {}
+    dsetresult_group = {}
+
     for dataset, res, hweight, evtcount in zip (datasets, results, hweights, evtcounts):
 
         if hweight[1].GetValue() != evtcount.GetValue():
@@ -103,9 +109,13 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
                                   "lumi_csv" : dataset.lumi_csv,
                                   "lumi_json" : dataset.lumi_json,
                                 }
+        
+        if scale_xsc_lumi and not dataset.is_data:
+            scale = dataset.xsec * lumisums["dataPostVFP"].GetValue()*1000 / hweight[0].GetValue()
+        else:
+            scale = 1
 
-
-        dsetresult["weight_sum"] = float(hweight[0].GetValue())
+        dsetresult["weight_sum"] = float(hweight[0].GetValue() * scale)
         dsetresult["event_count"] = float(evtcount.GetValue())
 
         if dataset.name in lumisums:
@@ -113,8 +123,31 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
             lumi = lumisums[dataset.name].GetValue()
             dsetresult["lumi"] = lumi
 
-        output = {}
+        if scale_xsc_lumi and dataset.group in groups_to_aggregate:
+            # only sum up members if they have been scaled before
+            aggregate = True
 
+            if dataset.group not in output_group.keys():
+                output_group[dataset.group] = {}
+
+                dsetresult_group[dataset.group] = {}
+                dsetresult_group[dataset.group]["dataset"] = {
+                    "name": dataset.group,
+                    "filepaths": dataset.filepaths,
+                }
+                dsetresult_group[dataset.group]["n_members"] = 1
+                dsetresult_group[dataset.group]["weight_sum"] = float(hweight[0].GetValue() * scale)
+                dsetresult_group[dataset.group]["event_count"] = float(evtcount.GetValue())
+            else:
+                dsetresult_group[dataset.group]["dataset"]["filepaths"] += dataset.filepaths
+                dsetresult_group[dataset.group]["n_members"] += 1
+                dsetresult_group[dataset.group]["weight_sum"] += float(hweight[0].GetValue() * scale)
+                dsetresult_group[dataset.group]["event_count"] += float(evtcount.GetValue())
+
+        else:
+            aggregate = False
+            output = {}
+        
         for r in res:
             if isinstance(r.GetValue(), ROOT.TNamed):
                 name = r.GetName()
@@ -123,11 +156,46 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
             else:
                 name = str(uuid.uuid1())
 
-            output[name] = H5PickleProxy(r.GetValue())
+            if scale != 1:
+                histogram = scale * r.GetValue()
+            else: 
+                histogram = r.GetValue()
+
+            if aggregate:
+                if name not in output_group[dataset.group]:
+                    output_group[dataset.group][name] = [histogram,]
+                else:
+                    output_group[dataset.group][name].append(histogram)
+            else:
+                if name in output.keys():
+                    print(f"Warning: the histogram {name} is defined more than once! It will be overwritten.")
+                    
+                output[name] = H5PickleProxy(histogram)
+
+        if not aggregate:
+
+            dsetresult["output"] = output
+
+            resultdict[dataset.name] = dsetresult
+
+    for g_name, group in output_group.items():
+        output = {}
+        print(f"--- Aggregate group {g_name}")
+        for h_name, histograms in group.items():
+
+            if len(histograms) != dsetresult_group[g_name]["n_members"]:
+                print(f"Warning: for {h_name} from group {g_name} there is a different number of histograms ({len(histograms)}) than original members ("+str(dsetresult_group[g_name]["n_members"])+")")
+                print("   Summing them up probably leads to wrong behavious")
+                # FIXME: Currently, if a histogram is only available in some members but not in outers of the same group it is still added up,
+                #   which is probably not desired.
+
+            output[h_name] = H5PickleProxy(sum(histograms))
+            
+        dsetresult = dsetresult_group[g_name]
 
         dsetresult["output"] = output
 
-        resultdict[dataset.name] = dsetresult
+        resultdict[g_name] = dsetresult
 
     time_done = time.time()
 
