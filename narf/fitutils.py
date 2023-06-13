@@ -504,7 +504,7 @@ def hist_to_quantiles(h, quant_cdfvals, axis = -1):
 
     return quants.numpy(), quant_errs.numpy()
 
-def func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=-1):
+def func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=-1, transform = None):
     x_flat = tf.reshape(xedges[axis], (-1,))
     x_low = x_flat[0]
     x_high = x_flat[-1]
@@ -513,7 +513,34 @@ def func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=-1):
 
     spline_edges = xedges[axis]
 
+    ndim = len(xvals)
+
+    if transform is not None:
+        transform_cdf, transform_quantile = transform
+
+        slicelim = [slice(None)]*ndim
+        slicelim[axis] = slice(1, -1)
+        slicelim = tuple(slicelim)
+
+        quants = quants[slicelim]
+
+        quant_cdfvals = quant_cdfvals[slicelim]
+        quant_cdfvals = transform_quantile(quant_cdfvals)
+
     cdfvals = pchip_interpolate(quants, quant_cdfvals, spline_edges, axis=axis)
+
+    if transform is not None:
+        cdfvals = transform_cdf(cdfvals)
+
+    slicefirst = [slice(None)]*ndim
+    slicefirst[axis] = slice(None, 1)
+    slicefirst = tuple(slicefirst)
+
+    slicelast = [slice(None)]*ndim
+    slicelast[axis] = slice(-1, None)
+    slicelast = tuple(slicelast)
+
+    cdfvals = (cdfvals - cdfvals[slicefirst])/(cdfvals[slicelast] - cdfvals[slicefirst])
 
     return cdfvals
 

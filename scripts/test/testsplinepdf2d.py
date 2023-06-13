@@ -7,10 +7,11 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import hist
+import math
 
 np.random.seed(1234)
 
-nevt = 100000
+nevt = 10000
 
 runiform = np.random.random((nevt,))
 rgaus = np.random.normal(size=(nevt,))
@@ -71,10 +72,25 @@ def parms_to_qparms(xvals, parms):
     return qparms
 
 
+def func_transform_cdf(quantile):
+    const_sqrt2 = tf.constant(math.sqrt(2.), quantile.dtype)
+    return 0.5*(1. + tf.math.erf(quantile/const_sqrt2))
+
+def func_transform_quantile(cdf):
+    const_sqrt2 = tf.constant(math.sqrt(2.), cdf.dtype)
+    return const_sqrt2*tf.math.erfinv(2.*cdf - 1.)
+
+# def func_transform_cdf(quantile):
+#     return tf.math.log(quantile/(1.-quantile))
+#
+# def func_transform_quantile(cdf):
+#     return tf.math.sigmoid(cdf)
 
 def func_cdf(xvals, xedges, parms):
     qparms = parms_to_qparms(xvals, parms)
-    return narf.fitutils.func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=1)
+    # return narf.fitutils.func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=1)
+
+    return narf.fitutils.func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=1, transform = (func_transform_cdf, func_transform_quantile))
 
 def func_constraint(xvals, xedges, parms):
     qparms = parms_to_qparms(xvals, parms)
@@ -123,6 +139,7 @@ pdfvals *= htest.sum()/np.sum(pdfvals)
 # hplot = htest[5]
 
 plot = plt.figure()
+plt.yscale("log")
 htest[5,:].plot()
 plt.plot(htest.axes[1].centers, pdfvals[5])
 # plt.show()
