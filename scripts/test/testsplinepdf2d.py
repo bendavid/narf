@@ -51,6 +51,11 @@ hist_quantiles, hist_quantile_errs = narf.fitutils.hist_to_quantiles(htest, quan
 print(hist_quantiles)
 print(hist_quantile_errs)
 
+hist_qparms, hist_qparm_errs = narf.fitutils.quantiles_to_qparms(hist_quantiles, hist_quantile_errs)
+
+print(hist_qparms)
+print(hist_qparm_errs)
+
 def parms_to_qparms(xvals, parms):
 
     parms_2d = tf.reshape(parms, (-1, 2))

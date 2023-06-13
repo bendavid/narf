@@ -419,19 +419,39 @@ def qparms_to_quantiles(qparms, x_low = 0., x_high = 1., axis = -1):
     deltaxfull = (x_high - x_low)*deltaxnorm
     deltaxfull = tf.concat([x0, deltaxfull], axis = axis)
 
-    quants = tf.cumsum(deltaxfull, axis=axis)
+    quants = tf.math.cumsum(deltaxfull, axis=axis)
 
     return quants
 
 
 
-def quantiles_to_qparms(quants, x_low = 0., x_high = 1., axis = -1):
+def quantiles_to_qparms(quants, quant_errs = None, x_low = 0., x_high = 1., axis = -1):
 
     deltaxfull = tf.experimental.numpy.diff(quants, axis=axis)
     deltaxnorm = deltaxfull/(x_high - x_low)
-    qparms = tf.log(deltaxnorm)
+    qparms = tf.math.log(deltaxnorm)
 
-    return qparms
+    if quant_errs is not None:
+        quant_vars = tf.math.square(quant_errs)
+
+        ndim = len(quant_errs.shape)
+
+        slicem1 = [slice(None)]*ndim
+        slicem1[axis] = slice(None,-1)
+        slicem1 = tuple(slicem1)
+
+        slice1 = [slice(None)]*ndim
+        slice1[axis] = slice(1,None)
+        slice1 = tuple(slice1)
+
+        deltaxfull_vars = quant_vars[slice1] + quant_vars[slicem1]
+        deltaxfull_errs = tf.math.sqrt(deltaxfull_vars)
+
+        qparm_errs = deltaxfull_errs/deltaxfull
+
+        return qparms, qparm_errs
+    else:
+        return qparms
 
 
 def hist_to_quantiles(h, quant_cdfvals, axis = -1):
