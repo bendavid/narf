@@ -462,7 +462,27 @@ def hist_to_quantiles(h, quant_cdfvals, axis = -1):
     quants = tf.where(quant_cdfvals == 0., x_low, quants)
     quants = tf.where(quant_cdfvals == 1., x_high, quants)
 
-    return quants.numpy()
+    ntot = tf.math.reduce_sum(yvals, axis=axis, keepdims=True)
+
+    quant_cdfval_errs = tf.math.sqrt(quant_cdfvals*(1.-quant_cdfvals)/ntot)
+
+    quant_cdfvals_up = quant_cdfvals + quant_cdfval_errs
+    quant_cdfvals_up = tf.clip_by_value(quant_cdfvals_up, 0., 1.)
+
+    quant_cdfvals_down = quant_cdfvals - quant_cdfval_errs
+    quant_cdfvals_down = tf.clip_by_value(quant_cdfvals_down, 0., 1.)
+
+    quants_up = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals_up)
+    quants_up = tf.where(quant_cdfvals_up == 0., x_low, quants_up)
+    quants_up = tf.where(quant_cdfvals_up == 1., x_high, quants_up)
+
+    quants_down = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals_down)
+    quants_down = tf.where(quant_cdfvals_down == 0., x_low, quants_down)
+    quants_down = tf.where(quant_cdfvals_down == 1., x_high, quants_down)
+
+    quant_errs = 0.5*(quants_up - quants_down)
+
+    return quants.numpy(), quant_errs.numpy()
 
 def func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=-1):
     x_flat = tf.reshape(xedges[axis], (-1,))

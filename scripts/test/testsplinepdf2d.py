@@ -46,9 +46,10 @@ quant_cdfvals = quant_cdfvals[None, :]
 
 # get quantiles from histogram, e.g. to help initialize the parameters for the fit (not actually used here)
 
-hist_quantiles = narf.fitutils.hist_to_quantiles(htest, quant_cdfvals, axis=1)
+hist_quantiles, hist_quantile_errs = narf.fitutils.hist_to_quantiles(htest, quant_cdfvals, axis=1)
 
 print(hist_quantiles)
+print(hist_quantile_errs)
 
 def parms_to_qparms(xvals, parms):
 
