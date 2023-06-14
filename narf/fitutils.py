@@ -484,12 +484,13 @@ def hist_to_quantiles(h, quant_cdfvals, axis = -1):
 
     ntot = tf.math.reduce_sum(yvals, axis=axis, keepdims=True)
 
-    quant_cdfval_errs = tf.math.sqrt(quant_cdfvals*(1.-quant_cdfvals)/ntot)
+    quant_cdf_bar = ntot/(1.+ntot)*(quant_cdfvals + 0.5/ntot)
+    quant_cdfval_errs = ntot/(1.+ntot)*tf.math.sqrt(quant_cdfvals*(1.-quant_cdfvals)/ntot + 0.25/ntot/ntot)
 
-    quant_cdfvals_up = quant_cdfvals + quant_cdfval_errs
+    quant_cdfvals_up = quant_cdf_bar + quant_cdfval_errs
     quant_cdfvals_up = tf.clip_by_value(quant_cdfvals_up, 0., 1.)
 
-    quant_cdfvals_down = quant_cdfvals - quant_cdfval_errs
+    quant_cdfvals_down = quant_cdf_bar - quant_cdfval_errs
     quant_cdfvals_down = tf.clip_by_value(quant_cdfvals_down, 0., 1.)
 
     quants_up = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals_up)
@@ -523,8 +524,8 @@ def func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=-1, tra
         slicelim = tuple(slicelim)
 
         quants = quants[slicelim]
-
         quant_cdfvals = quant_cdfvals[slicelim]
+
         quant_cdfvals = transform_quantile(quant_cdfvals)
 
     cdfvals = pchip_interpolate(quants, quant_cdfvals, spline_edges, axis=axis)
