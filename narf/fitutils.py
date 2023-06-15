@@ -503,6 +503,11 @@ def hist_to_quantiles(h, quant_cdfvals, axis = -1):
 
     quant_errs = 0.5*(quants_up - quants_down)
 
+    zero_const = tf.constant(0., dtype)
+
+    quant_errs = tf.where(quant_cdfvals == 0., zero_const, quant_errs)
+    quant_errs = tf.where(quant_cdfvals == 1., zero_const, quant_errs)
+
     return quants.numpy(), quant_errs.numpy()
 
 def func_cdf_for_quantile_fit(xvals, xedges, qparms, quant_cdfvals, axis=-1, transform = None):
