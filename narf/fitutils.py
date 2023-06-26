@@ -104,15 +104,21 @@ def pchip_interpolate(xi, yi, x, axis=-1):
     dperm = tf.transpose(d, perm=permfwd)
     hperm = tf.transpose(h, perm=permfwd)
 
+    x_index = tf.transpose(x_index, perm=permfwd)
+
     nbatch = ndim - 1
 
-    xi_xidx = tf.gather(xiperm, x_index, axis=-1, batch_dims=nbatch)
-    xi_1pxidx = tf.gather(xiperm, 1 + x_index, axis=-1, batch_dims=nbatch)
-    yi_xidx = tf.gather(yiperm, x_index, axis=-1, batch_dims=nbatch)
-    yi_1pxidx = tf.gather(yiperm, 1 + x_index, axis=-1, batch_dims=nbatch)
-    d_xidx = tf.gather(dperm, x_index, axis=-1, batch_dims=nbatch)
-    d_1pxidx = tf.gather(dperm, 1 + x_index, axis=-1, batch_dims=nbatch)
-    h_xidx = tf.gather(hperm, x_index, axis=-1, batch_dims=nbatch)
+    # in principle could use tf.gather here instead but this doesn't play nice with onnx
+
+    x_index = x_index[..., None]
+
+    xi_xidx = tf.gather_nd(xiperm, x_index, batch_dims=nbatch)
+    xi_1pxidx = tf.gather_nd(xiperm, 1 + x_index, batch_dims=nbatch)
+    yi_xidx = tf.gather_nd(yiperm, x_index, batch_dims=nbatch)
+    yi_1pxidx = tf.gather_nd(yiperm, 1 + x_index, batch_dims=nbatch)
+    d_xidx = tf.gather_nd(dperm, x_index, batch_dims=nbatch)
+    d_1pxidx = tf.gather_nd(dperm, 1 + x_index, batch_dims=nbatch)
+    h_xidx = tf.gather_nd(hperm, x_index, batch_dims=nbatch)
 
     xi_xidx = tf.transpose(xi_xidx, perm=permrev)
     xi_1pxidx = tf.transpose(xi_1pxidx, perm=permrev)
@@ -815,6 +821,7 @@ def fit_hist(hist, func, initial_parmvals, max_iter = 5, edmtol = 1e-5, mode = "
         covstatus = 1
 
     res = { "x" : current_parmvals,
+           "hess" : hess,
            "cov" : cov,
            "status" : status,
            "covstatus" : covstatus,
