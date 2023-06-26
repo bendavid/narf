@@ -150,7 +150,7 @@ def get_scaled_eigenvectors(hess, num_null = 2):
     v = v[:, num_null:]
 
     # scale the eigenvectors
-    vscaled = np.sqrt(e)*v
+    vscaled = v/np.sqrt(e)
 
     return vscaled
 
@@ -261,10 +261,13 @@ def transform_mc_simple(pt, ut):
 pt_test = tf.constant(0.2, tf.float64)
 ut_test = tf.constant(1.0, tf.float64)
 
-# ut, grad = transform_mc(pt_test, ut_test)
-ut = transform_mc(pt_test, ut_test)
+ut, grad = transform_mc(pt_test, ut_test)
+# ut = transform_mc(pt_test, ut_test)
 
-# print("shapes", ut.shape, grad.shape)
+print("shapes", ut.shape, grad.shape)
+
+print("ut", ut)
+print("grad", grad)
 
 input_signature = [scalar_spec, scalar_spec]
 
@@ -275,20 +278,22 @@ class TestMod(tf.Module):
         return transform_mc(pt, ut)
 
 module = TestMod()
-tf.saved_model.save(module, "test")
+# tf.saved_model.save(module, "test")
 
-# concrete_function = transform_mc.get_concrete_function()
+concrete_function = module.__call__.get_concrete_function()
 
 # Convert the model
-# converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_function]) # path to the SavedModel directory
+converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_function], module)
 
-converter = tf.lite.TFLiteConverter.from_saved_model("test") # path to the SavedModel directory
+# converter = tf.lite.TFLiteConverter.from_saved_model("test") # path to the SavedModel directory
 converter.target_spec.supported_ops = [
   tf.lite.OpsSet.TFLITE_BUILTINS, # enable TensorFlow Lite ops.
   tf.lite.OpsSet.SELECT_TF_OPS # enable TensorFlow ops.
 ]
 
 tflite_model = converter.convert()
+
+# print(tflite_model)
 
 # Save the model.
 with open('model.tflite', 'wb') as f:
