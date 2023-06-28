@@ -1,6 +1,10 @@
+#ifndef NARF_TFLITEUTILS_H
+#define NARF_TFLITEUTILS_H
+
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/kernels/register.h"
 #include "tensorflow/lite/model.h"
+#include <algorithm>
 
 namespace narf {
 
@@ -8,6 +12,8 @@ namespace narf {
     public:
         tflite_helper(const std::string &filename, const std::string &signature = "serving_default", const unsigned int nslots = 1) :
             model_(tflite::FlatBufferModel::BuildFromFile(filename.c_str())) {
+
+                unsigned int nslots_actual = std::max(nslots, 1U);
 
                 if (model_ == nullptr) {
                     throw std::runtime_error("Failed to load model");
@@ -17,7 +23,7 @@ namespace narf {
                 tflite::InterpreterBuilder builder(*model_, resolver);
                 builder.SetNumThreads(1);
 
-                for (unsigned int islot = 0; islot < nslots; ++islot) {
+                for (unsigned int islot = 0; islot < nslots_actual; ++islot) {
                     auto &interpreter = interpreters_.emplace_back();
                     if (builder(&interpreter) != kTfLiteOk) {
                         throw std::runtime_error("Failed to build interpreter");
@@ -70,7 +76,6 @@ namespace narf {
                 throw std::runtime_error("Failed to invoke interpreter");
             }
 
-
             auto fill_outputs = [this, &interpreter](auto&... tensors) {
                 auto fill_output = [&interpreter](const std::size_t idx, auto &tensor) {
                     using scalar_t = typename std::decay_t<decltype(tensor)>::Scalar;
@@ -99,3 +104,5 @@ namespace narf {
     };
 
 }
+
+#endif

@@ -1,3 +1,6 @@
+#ifndef NARF_ONNXUTILS_H
+#define NARF_ONNXUTILS_H
+
 #include "onnxruntime/onnxruntime_cxx_api.h"
 #include "traits.h"
 
@@ -210,3 +213,5 @@ namespace narf {
   };
 
 }
+
+#endif
