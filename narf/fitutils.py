@@ -31,6 +31,25 @@ def pchip_interpolate(xi, yi, x, axis=-1):
     if yi.shape.num_elements() < max_nelems:
         yi = tf.broadcast_to(yi, broadcast_shape)
 
+    # # permutation to move the selected axis to the end
+    selaxis = axis
+    if axis < 0:
+        selaxis = ndim + axis
+
+    permfwd = list(range(ndim))
+    permfwd.remove(selaxis)
+    permfwd.append(selaxis)
+
+    # reverse permutation to restore the original axis order
+    permrev = list(range(ndim))
+    permrev.remove(ndim-1)
+    permrev.insert(selaxis, ndim-1)
+
+    xi = tf.transpose(xi, permfwd)
+    yi = tf.transpose(yi, permfwd)
+    x = tf.transpose(x, permfwd)
+    axis = -1
+
     xi_steps = tf.experimental.numpy.diff(xi, axis=axis)
 
 
@@ -86,30 +105,15 @@ def pchip_interpolate(xi, yi, x, axis=-1):
     mask = tf.math.logical_or(tf.concat((false_const, delta == 0), axis=axis), tf.concat((delta == 0, false_const), axis=axis))
     d = tf.where(mask, float64_zero_constant, d)
 
-    # permutation to move the selected axis to the end
-    selaxis = axis
-    if selaxis < 0:
-        selaxis = ndim + selaxis
-    permfwd = list(range(ndim))
-    permfwd.remove(selaxis)
-    permfwd.append(selaxis)
-
-    # reverse permutation to restore the original axis order
-    permrev = list(range(ndim))
-    permrev.remove(ndim-1)
-    permrev.insert(selaxis, ndim-1)
-
-    xiperm = tf.transpose(xi, perm=permfwd)
-    yiperm = tf.transpose(yi, perm=permfwd)
-    dperm = tf.transpose(d, perm=permfwd)
-    hperm = tf.transpose(h, perm=permfwd)
-
-    x_index = tf.transpose(x_index, perm=permfwd)
+    xiperm = xi
+    yiperm = yi
+    dperm = d
+    hperm = h
 
     nbatch = ndim - 1
 
-    # in principle could use tf.gather here instead but this doesn't play nice with onnx
-
+    # # in principle could use tf.gather here instead but this doesn't play nice with onnx
+    #
     x_index = x_index[..., None]
 
     xi_xidx = tf.gather_nd(xiperm, x_index, batch_dims=nbatch)
@@ -120,14 +124,6 @@ def pchip_interpolate(xi, yi, x, axis=-1):
     d_1pxidx = tf.gather_nd(dperm, 1 + x_index, batch_dims=nbatch)
     h_xidx = tf.gather_nd(hperm, x_index, batch_dims=nbatch)
 
-    xi_xidx = tf.transpose(xi_xidx, perm=permrev)
-    xi_1pxidx = tf.transpose(xi_1pxidx, perm=permrev)
-    yi_xidx = tf.transpose(yi_xidx, perm=permrev)
-    yi_1pxidx = tf.transpose(yi_1pxidx, perm=permrev)
-    d_xidx = tf.transpose(d_xidx, perm=permrev)
-    d_1pxidx = tf.transpose(d_1pxidx, perm=permrev)
-    h_xidx = tf.transpose(h_xidx, perm=permrev)
-
     dxxi = x - xi_xidx
     dxxid = x - xi_1pxidx
     dxxi2 = tf.math.pow(dxxi, 2)
@@ -137,6 +133,8 @@ def pchip_interpolate(xi, yi, x, axis=-1):
             (yi_xidx * dxxid2 * (dxxi + h_xidx / 2) - yi_1pxidx * dxxi2 *
             (dxxid - h_xidx / 2)) + 1 / tf.math.pow(h_xidx, 2) *
             (d_xidx * dxxid2 * dxxi + d_1pxidx * dxxi2 * dxxid))
+
+    y = tf.transpose(y, permrev)
 
     return y
 
@@ -483,7 +481,7 @@ def hist_to_quantiles(h, quant_cdfvals, axis = -1):
 
     hist_cdfvals = tf.concat([x0, hist_cdfvals], axis=axis)
 
-    quants = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals)
+    quants = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals, axis=axis)
 
     quants = tf.where(quant_cdfvals == 0., x_low, quants)
     quants = tf.where(quant_cdfvals == 1., x_high, quants)
@@ -499,11 +497,11 @@ def hist_to_quantiles(h, quant_cdfvals, axis = -1):
     quant_cdfvals_down = quant_cdf_bar - quant_cdfval_errs
     quant_cdfvals_down = tf.clip_by_value(quant_cdfvals_down, 0., 1.)
 
-    quants_up = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals_up)
+    quants_up = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals_up, axis=axis)
     quants_up = tf.where(quant_cdfvals_up == 0., x_low, quants_up)
     quants_up = tf.where(quant_cdfvals_up == 1., x_high, quants_up)
 
-    quants_down = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals_down)
+    quants_down = pchip_interpolate(hist_cdfvals, xedges[axis], quant_cdfvals_down, axis=axis)
     quants_down = tf.where(quant_cdfvals_down == 0., x_low, quants_down)
     quants_down = tf.where(quant_cdfvals_down == 1., x_high, quants_down)
 
