@@ -4,6 +4,7 @@
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/kernels/register.h"
 #include "tensorflow/lite/model.h"
+#include <tbb/task_arena.h>
 #include <algorithm>
 
 namespace narf {
@@ -51,9 +52,15 @@ namespace narf {
         }
 
         template <typename inputs_t, typename outputs_t>
-        void operator() (unsigned int slot, const inputs_t &inputs, outputs_t &outputs) {
-            auto &interpreter = interpreters_[slot];
-            auto &runner = runners_[slot];
+        void operator() (const inputs_t &inputs, outputs_t &outputs) {
+            auto const tbb_slot = std::max(tbb::v1::this_task_arena::current_thread_index(), 0);
+
+            if (tbb_slot >= interpreters_.size()) {
+                throw std::runtime_error("Not enough interpreters allocated for number of tbb threads");
+            }
+
+            auto &interpreter = interpreters_[tbb_slot];
+            auto &runner = runners_[tbb_slot];
 
 
             auto fill_inputs = [this, &interpreter](auto const&... tensors) {
