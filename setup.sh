@@ -5,4 +5,7 @@ export EXTRA_CLING_ARGS="-O3"
 #workaround for bug in tf lite
 export TF_NUM_INTEROP_THREADS="1"
 
+#workaround for lock contention issue in tflite
+export TF_ENABLE_ONEDNN_OPTS="0"
+
 echo "Created environment variable NARF_BASE=${NARF_BASE}"
