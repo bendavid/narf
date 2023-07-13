@@ -112,17 +112,13 @@ def pchip_interpolate(xi, yi, x, axis=-1):
 
     nbatch = ndim - 1
 
-    # # in principle could use tf.gather here instead but this doesn't play nice with onnx
-    #
-    x_index = x_index[..., None]
-
-    xi_xidx = tf.gather_nd(xiperm, x_index, batch_dims=nbatch)
-    xi_1pxidx = tf.gather_nd(xiperm, 1 + x_index, batch_dims=nbatch)
-    yi_xidx = tf.gather_nd(yiperm, x_index, batch_dims=nbatch)
-    yi_1pxidx = tf.gather_nd(yiperm, 1 + x_index, batch_dims=nbatch)
-    d_xidx = tf.gather_nd(dperm, x_index, batch_dims=nbatch)
-    d_1pxidx = tf.gather_nd(dperm, 1 + x_index, batch_dims=nbatch)
-    h_xidx = tf.gather_nd(hperm, x_index, batch_dims=nbatch)
+    xi_xidx = tf.gather(xiperm, x_index, batch_dims=nbatch, axis=-1)
+    xi_1pxidx = tf.gather(xiperm, 1 + x_index, batch_dims=nbatch, axis=-1)
+    yi_xidx = tf.gather(yiperm, x_index, batch_dims=nbatch, axis=-1)
+    yi_1pxidx = tf.gather(yiperm, 1 + x_index, batch_dims=nbatch, axis=-1)
+    d_xidx = tf.gather(dperm, x_index, batch_dims=nbatch, axis=-1)
+    d_1pxidx = tf.gather(dperm, 1 + x_index, batch_dims=nbatch, axis=-1)
+    h_xidx = tf.gather(hperm, x_index, batch_dims=nbatch, axis=-1)
 
     dxxi = x - xi_xidx
     dxxid = x - xi_1pxidx
