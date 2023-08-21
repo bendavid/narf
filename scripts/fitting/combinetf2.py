@@ -41,12 +41,12 @@ if args.saveHists:
 
     hist_data_obs = hist.Hist(axis_obs, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
     hist_data_obs.values()[...] = memoryview(fitter.indata.data_obs)
-    hist_data_obs.variances()[...] = np.sqrt(hist_data_obs.values())
+    hist_data_obs.variances()[...] = hist_data_obs.values()
     results["hist_data_obs"] = narf.ioutils.H5PickleProxy(hist_data_obs)
 
     hist_nobs = hist.Hist(axis_obs, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
     hist_nobs.values()[...] = memoryview(fitter.nobs.value())
-    hist_nobs.variances()[...] = np.sqrt(hist_nobs.values())
+    hist_nobs.variances()[...] = hist_nobs.values()
     results["hist_nobs"] = narf.ioutils.H5PickleProxy(hist_nobs)
 
     invhessianprefit = fitter.prefit_covariance()
@@ -56,8 +56,9 @@ if args.saveHists:
 
     exp_pre_per_process = fitter.expected_events_per_process()
 
-    hist_prefit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Double(), name = "prefit", label = "prefit expected number of events")
+    hist_prefit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Weight(), name = "prefit", label = "prefit expected number of events")
     hist_prefit.values()[...] = memoryview(exp_pre_per_process)
+    hist_prefit.variances()[...] = 0.
     results["hist_prefit"] = narf.ioutils.H5PickleProxy(hist_prefit)
 
     if args.computeHistErrors:
@@ -110,8 +111,9 @@ if args.saveHists:
 
     exp_post_per_process = fitter.expected_events_per_process()
 
-    hist_postfit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Double(), name = "postfit", label = "postfit expected number of events")
+    hist_postfit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Weight(), name = "postfit", label = "postfit expected number of events")
     hist_postfit.values()[...] = memoryview(exp_post_per_process)
+    hist_postfit.variances()[...] = 0.
     results["hist_postfit"] = narf.ioutils.H5PickleProxy(hist_postfit)
 
     if args.computeHistErrors:
