@@ -37,14 +37,14 @@ if args.saveHists:
 
     axis_obs = hist.axis.Integer(0, nbins, underflow=False, overflow=False, name="obs")
     axis_obsfull = hist.axis.Integer(0, nbinsfull, underflow=False, overflow=False, name="obsfull")
-    axis_procs = hist.axis.StrCategory(fitter.indata.procs)
+    axis_procs = hist.axis.StrCategory(fitter.indata.procs, name="processes")
 
-    hist_data_obs = hist.Hist(axis_obs, name = "data_obs", label="observed number of events in data")
+    hist_data_obs = hist.Hist(axis_obs, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
     hist_data_obs.values()[...] = memoryview(fitter.indata.data_obs)
     hist_data_obs.variances()[...] = np.sqrt(hist_data_obs.values())
     results["hist_data_obs"] = narf.ioutils.H5PickleProxy(hist_data_obs)
 
-    hist_nobs = hist.Hist(axis_obs, name = "nobs", label = "observed number of events for fit")
+    hist_nobs = hist.Hist(axis_obs, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
     hist_nobs.values()[...] = memoryview(fitter.nobs.value())
     hist_nobs.variances()[...] = np.sqrt(hist_nobs.values())
     results["hist_nobs"] = narf.ioutils.H5PickleProxy(hist_nobs)
@@ -63,7 +63,7 @@ if args.saveHists:
     if args.computeHistErrors:
         exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance(invhessianprefitchol)
 
-        hist_prefit_inclusive = hist.Hist(axis_obsfull, name = "prefit_inclusive", label = "prefit expected number of events for all processes combined")
+        hist_prefit_inclusive = hist.Hist(axis_obsfull, storage=hist.storage.Weight(), name = "prefit_inclusive", label = "prefit expected number of events for all processes combined")
         hist_prefit_inclusive.values()[...] = memoryview(exp_pre_inclusive)
         hist_prefit_inclusive.variances()[...] = memoryview(exp_pre_inclusive_var)
         results["hist_prefit_inclusive"] = narf.ioutils.H5PickleProxy(hist_prefit_inclusive)
@@ -106,20 +106,22 @@ if args.externalPostfit is not None:
     fitter.x.assign(xvals)
     covchol_ext = tf.linalg.cholesky(covval)
 
-exp_post_per_process = fitter.expected_events_per_process()
+if args.saveHists:
 
-hist_postfit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Double(), name = "postfit", label = "postfit expected number of events")
-hist_postfit.values()[...] = memoryview(exp_post_per_process)
-results["hist_postfit"] = narf.ioutils.H5PickleProxy(hist_postfit)
+    exp_post_per_process = fitter.expected_events_per_process()
 
-if args.computeHistErrors:
+    hist_postfit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Double(), name = "postfit", label = "postfit expected number of events")
+    hist_postfit.values()[...] = memoryview(exp_post_per_process)
+    results["hist_postfit"] = narf.ioutils.H5PickleProxy(hist_postfit)
 
-    exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(covchol_ext)
+    if args.computeHistErrors:
 
-    hist_postfit_inclusive = hist.Hist(axis_obsfull, name = "postfit_inclusive", label = "postfit expected number of events for all processes combined")
-    hist_postfit_inclusive.values()[...] = memoryview(exp_post_inclusive)
-    hist_postfit_inclusive.variances()[...] = memoryview(exp_post_inclusive_var)
-    results["hist_postfit_inclusive"] = narf.ioutils.H5PickleProxy(hist_postfit_inclusive)
+        exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(covchol_ext)
+
+        hist_postfit_inclusive = hist.Hist(axis_obsfull, storage=hist.storage.Weight(), name = "postfit_inclusive", label = "postfit expected number of events for all processes combined")
+        hist_postfit_inclusive.values()[...] = memoryview(exp_post_inclusive)
+        hist_postfit_inclusive.variances()[...] = memoryview(exp_post_inclusive_var)
+        results["hist_postfit_inclusive"] = narf.ioutils.H5PickleProxy(hist_postfit_inclusive)
 
 
 with h5py.File(args.output, "w") as fout:
