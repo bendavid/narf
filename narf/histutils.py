@@ -108,19 +108,7 @@ def make_array_interface_view(boost_hist):
 
     elem_size = int(view.__array_interface__["typestr"][2:])
     shape = view.__array_interface__["shape"]
-    strides = view.__array_interface__["strides"]
-
-    # compute strides for a fortran-style contiguous array with the given shape
-    stridesf = []
-    current_stride = elem_size
-    for axis_size in shape:
-        stridesf.append(current_stride)
-        current_stride *= axis_size
-    stridesf = tuple(stridesf)
-
-    if strides is None:
-        #default stride for C-style contiguous array
-        strides = tuple(reversed(stridesf))
+    strides = view.strides
         
     underflow = [axis.traits.underflow for axis in boost_hist.axes]
 
