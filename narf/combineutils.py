@@ -1,6 +1,7 @@
 import tensorflow as tf
 import tensorflow_io as tfio
 import numpy as np
+import scipy
 import h5py
 
 class SimpleSparseTensor:
@@ -177,6 +178,9 @@ class Fitter:
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
 
+        nexpfullcentral = self.expected_events()
+        self.nexpnom = tf.Variable(nexpfullcentral, trainable=False, name="nexpnom")
+
     def prefit_covariance(self):
         # free parameters are taken to have zero uncertainty for the purposes of prefit uncertainties
         var_poi = tf.zeros([self.npoi], dtype=self.indata.dtype)
@@ -311,10 +315,111 @@ class Fitter:
         return normfullcentral
 
     @tf.function
+    def expected_events(self):
+        return self._compute_yields_inclusive()
+
+    @tf.function
     def expected_events_per_process(self):
         return self._compute_yields_per_process()
 
     @tf.function
     def expected_events_inclusive_with_variance(self, invhesschol):
         return self._experr(self._compute_yields_inclusive, invhesschol)
+
+    def _compute_nll(self):
+        theta = self.x[self.npoi:]
+
+        nexpfullcentral, normfullcentral = self._compute_yields()
+
+        nexp = nexpfullcentral
+
+        nobsnull = tf.equal(self.nobs,tf.zeros_like(self.nobs))
+
+        nexpsafe = tf.where(nobsnull, tf.ones_like(self.nobs), nexp)
+        lognexp = tf.math.log(nexpsafe)
+
+        nexpnomsafe = tf.where(nobsnull, tf.ones_like(self.nobs), self.nexpnom)
+        lognexpnom = tf.math.log(nexpnomsafe)
+
+        #final likelihood computation
+
+        #poisson term
+        lnfull = tf.reduce_sum(-self.nobs*lognexp + nexp, axis=-1)
+
+        #poisson term with offset to improve numerical precision
+        ln = tf.reduce_sum(-self.nobs*(lognexp-lognexpnom) + nexp-self.nexpnom, axis=-1)
+
+        #constraints
+        lc = tf.reduce_sum(self.indata.constraintweights*0.5*tf.square(theta - self.theta0))
+
+        l = ln + lc
+        lfull = lnfull + lc
+
+        return l, lfull
+
+    def _compute_loss(self):
+        l, lfull = self._compute_nll()
+        return l
+
+    @tf.function
+    def loss_val(self):
+        val = self._compute_loss()
+        return val
+
+    @tf.function
+    def loss_val_grad(self):
+        with tf.GradientTape() as t:
+            val = self._compute_loss()
+        grad = t.gradient(val, self.x)
+
+        return val, grad
+
+    @tf.function
+    def loss_val_grad_hessp(self, p):
+        with tf.autodiff.ForwardAccumulator(self.x, p) as acc:
+            with tf.GradientTape() as grad_tape:
+                val = self._compute_loss()
+            grad = grad_tape.gradient(val, self.x)
+        hessp = acc.jvp(grad)
+
+        return val, grad, hessp
+
+    @tf.function
+    def loss_val_grad_hess(self):
+        with tf.GradientTape() as t2:
+            with tf.GradientTape() as t1:
+                val = self._compute_loss()
+            grad = t1.gradient(val, self.x)
+        hess = t2.jacobian(grad, self.x)
+
+        return val, grad, hess
+
+    def minimize(self):
+
+        def scipy_loss(xval):
+            self.x.assign(xval)
+            val, grad = self.loss_val_grad()
+            print("scipy_loss", val)
+            return val.numpy(), grad.numpy()
+
+        def scipy_hessp(xval, pval):
+            self.x.assign(xval)
+            p = tf.convert_to_tensor(pval)
+            val, grad, hessp = self.loss_val_grad_hessp(p)
+            print("scipy_hessp", val)
+            return hessp.numpy()
+
+
+        xval = self.x.numpy()
+
+        res = scipy.optimize.minimize(scipy_loss, xval, method = "trust-krylov", jac = True, hessp = scipy_hessp)
+
+        xval = res["x"]
+
+        self.x.assign(xval)
+
+        print(res)
+
+        return res
+
 

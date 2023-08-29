@@ -70,6 +70,17 @@ if args.saveHists:
         results["hist_prefit_inclusive"] = narf.ioutils.H5PickleProxy(hist_prefit_inclusive)
 
 
+
+
+if args.toys >= 0:
+    fitter.minimize()
+
+val, grad, hess = fitter.loss_val_grad_hess()
+
+cov = tf.linalg.inv(hess)
+
+
+
 if args.externalPostfit is not None:
     # load results from external fit and set postfit value and covariance elements for common parameters
     with h5py.File(args.externalPostfit, "r") as fext:
@@ -105,9 +116,15 @@ if args.externalPostfit is not None:
             covval[iparm, jparm] = cov_ext[iparm_ext, jparm_ext]
 
     fitter.x.assign(xvals)
-    covchol_ext = tf.linalg.cholesky(covval)
+    cov = tf.convert_to_tensor(covval)
+
+
+
+
 
 if args.saveHists:
+
+    covchol_ext = tf.linalg.cholesky(cov)
 
     exp_post_per_process = fitter.expected_events_per_process()
 
