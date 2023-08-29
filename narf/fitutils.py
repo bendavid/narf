@@ -6,6 +6,178 @@ import math
 from numpy import (zeros, where, diff, floor, minimum, maximum, array, concatenate, logical_or, logical_xor,
                    sqrt)
 
+def cubic_spline_interpolate(xi, yi, x, axis=-1, extrpl=[None, None]):
+
+    # natural cublic spline
+    # if extrpl is given, the spline is linearly extrapolated outside the given boundaries
+    
+    # https://www.math.ntnu.no/emner/TMA4215/2008h/cubicsplines.pdf
+    # https://random-walks.org/content/misc/ncs/ncs.html
+    
+    # move selected axis to the end
+    tensors = [xi, yi]
+    nelems = [tensor.shape.num_elements() for tensor in tensors]
+
+    max_nelems = max(nelems)
+    broadcast_shape = tensors[nelems.index(max_nelems)].shape
+
+    ndim = len(broadcast_shape)
+
+    if xi.shape.num_elements() < max_nelems:
+        xi = tf.broadcast_to(xi, broadcast_shape)
+    if yi.shape.num_elements() < max_nelems:
+        yi = tf.broadcast_to(yi, broadcast_shape)
+
+    # # permutation to move the selected axis to the end
+    selaxis = axis
+    if axis < 0:
+        selaxis = ndim + axis
+    axis = -1
+    permfwd = list(range(ndim))
+    permfwd.remove(selaxis)
+    permfwd.append(selaxis)
+
+    # reverse permutation to restore the original axis order
+    permrev = list(range(ndim))
+    permrev.remove(ndim-1)
+    permrev.insert(selaxis, ndim-1)
+
+
+    ## start spline construction
+    xi = tf.transpose(xi, permfwd)
+    yi = tf.transpose(yi, permfwd)
+    x = tf.transpose(x, permfwd)
+
+    h = tf.experimental.numpy.diff(xi, axis=axis)
+    b = tf.experimental.numpy.diff(yi, axis=axis) / h
+    v = 2 * (h[:, 1:] + h[:, :-1])
+    u = 6 * (b[:, 1:] - b[:, :-1])
+
+    shape = (xi.shape[0], xi.shape[-1]-2, xi.shape[-1]-2)
+    A = tf.zeros(shape, dtype=tf.float64)
+
+    A = tf.linalg.set_diag(A, v)
+    A = tf.linalg.set_diag(A, h[:, 1:-1], k=1)
+    A = tf.linalg.set_diag(A, h[:, 1:-1], k=-1)
+
+    uu = u[:,:,None]
+    z = tf.linalg.solve(A, uu)
+    z = tf.squeeze(z, axis=axis)
+    f = tf.zeros(xi.shape[0], dtype=tf.float64)[:,None]
+    z = tf.concat([f, z, f], axis=axis)
+
+    x_steps = tf.experimental.numpy.diff(x, axis=axis)
+    idx_zero_constant = tf.constant(0, dtype=tf.int64)
+    float64_zero_constant = tf.constant(0., dtype=tf.float64)
+
+    x_compare = x[...,None] < xi[..., None, :]
+    x_compare_all = tf.math.reduce_all(x_compare, axis=axis)
+    x_compare_none = tf.math.reduce_all(tf.logical_not(x_compare), axis=axis)
+    x_index = tf.argmax(x_compare, axis=axis) - 1
+    x_index = tf.where(x_compare_all, idx_zero_constant, x_index)
+    x_index = tf.where(x_compare_none, tf.constant(xi.shape[axis]-2, dtype=tf.int64), x_index)
+
+    nbatch = ndim - 1
+
+    z_xidx = tf.gather(z, x_index, batch_dims=nbatch, axis=-1)
+    z_1pxidx = tf.gather(z, x_index+1, batch_dims=nbatch, axis=-1)
+    h_xidx = tf.gather(h, x_index, batch_dims=nbatch, axis=-1)
+    xi_xidx = tf.gather(xi, x_index, batch_dims=nbatch, axis=-1)
+    xi_1pxidx = tf.gather(xi, x_index+1, batch_dims=nbatch, axis=-1)
+    dxxi = x - xi_xidx
+    dxix = xi_1pxidx - x
+
+    y = z_1pxidx / (6 * h_xidx) * dxxi ** 3 + \
+        z_xidx / (6 * h_xidx) * dxix ** 3 + \
+        (tf.gather(yi, x_index+1, batch_dims=nbatch, axis=-1) / h_xidx - \
+        z_1pxidx * h_xidx / 6) * dxxi + \
+        (tf.gather(yi, x_index, batch_dims=nbatch, axis=-1) / h_xidx - \
+        z_xidx * h_xidx / 6) * dxix
+
+
+    # right side linear extrapolation
+    if extrpl[1] != None:
+
+        # get closest x value to the boundary
+        diff = tf.abs(x - extrpl[1])
+        idx = tf.argmin(diff, axis=axis)
+        x_max = tf.gather(x, idx, axis=axis)
+
+        # calculate derivative yp_max at boundary
+        x_compare_max = x_max[...,None] < xi[..., None, :]
+        x_compare_max_all = tf.math.reduce_all(x_compare_max, axis=axis)
+        x_compare_max_none = tf.math.reduce_all(tf.logical_not(x_compare_max), axis=axis)
+        x_index_max = tf.argmax(x_compare_max, axis=axis) - 1
+        x_index_max = tf.where(x_compare_max_all, idx_zero_constant, x_index_max)
+        x_index_max = tf.where(x_compare_max_none, tf.constant(xi.shape[axis]-2, dtype=tf.int64), x_index_max)
+
+        z_xidx = tf.gather(z, x_index_max, batch_dims=nbatch, axis=-1)
+        z_1pxidx =  tf.gather(z, x_index_max+1, batch_dims=nbatch, axis=-1)
+        hi_xidx = tf.gather(h, x_index_max, batch_dims=nbatch, axis=-1)
+        xi_xidx = tf.gather(xi, x_index_max, batch_dims=nbatch, axis=-1)
+        xi_1pxidx = tf.gather(xi, x_index_max+1, batch_dims=nbatch, axis=-1)
+        yi_xidx = tf.gather(yi, x_index_max, batch_dims=nbatch, axis=-1)
+        yi_1pxidx = tf.gather(yi, x_index_max+1, batch_dims=nbatch, axis=-1)
+
+        yp_max = z_1pxidx / (2 * hi_xidx) * (x_max - xi_xidx) ** 2 - \
+            z_xidx / (2 * hi_xidx) * (xi_1pxidx - x_max) ** 2 + \
+            1./hi_xidx*(yi_1pxidx - yi_xidx) - hi_xidx/6.*(z_1pxidx - z_xidx)
+
+        # evaluate spline at boundary 
+        idx = tf.broadcast_to(idx, (y.shape[0], 1))
+        y_b = tf.gather(y, idx, batch_dims=nbatch, axis=-1)
+
+        # replace y by lin for x > x_max
+        extrpl_lin = yp_max*(x-x_max) + y_b
+        cond = x[0,:] >= x_max
+        cond = tf.broadcast_to(cond, (extrpl_lin.shape[0], extrpl_lin.shape[1]))
+        y = tf.where(cond, extrpl_lin, y)
+
+
+    # left side linear extrapolation
+    if extrpl[0] != None:
+
+        # get closest x value to the boundary
+        diff = abs(x - extrpl[0])
+        idx = tf.argmin(diff, axis=axis)
+        x_min = tf.gather(x, idx, axis=axis)
+
+        # calculate derivative yp_min at boundary
+        x_compare_min = x_min[...,None] >= xi[..., None, :]
+        x_compare_min_all = tf.math.reduce_all(x_compare_min, axis=axis)
+        x_compare_min_none = tf.math.reduce_all(tf.logical_not(x_compare_min), axis=axis)
+        x_index_min = tf.argmax(x_compare_min, axis=axis) 
+        x_index_min = tf.where(x_compare_min_all, idx_zero_constant, x_index_min)
+        x_index_min = tf.where(x_compare_min_none, tf.constant(0, dtype=tf.int64), x_index_min)
+
+        z_xidx = tf.gather(z, x_index_min, batch_dims=nbatch, axis=-1)
+        z_1pxidx =  tf.gather(z, x_index_min+1, batch_dims=nbatch, axis=-1)
+        hi_xidx = tf.gather(h, x_index_min, batch_dims=nbatch, axis=-1)
+        xi_xidx = tf.gather(xi, x_index_min, batch_dims=nbatch, axis=-1)
+        xi_1pxidx = tf.gather(xi, x_index_min+1, batch_dims=nbatch, axis=-1)
+        yi_xidx = tf.gather(yi, x_index_min, batch_dims=nbatch, axis=-1)
+        yi_1pxidx = tf.gather(yi, x_index_min+1, batch_dims=nbatch, axis=-1)
+
+        yp_min = z_1pxidx / (2 * hi_xidx) * (x_min - xi_xidx) ** 2 - \
+            z_xidx / (2 * hi_xidx) * (xi_1pxidx - x_min) ** 2 + \
+            1./hi_xidx*(yi_1pxidx - yi_xidx) - hi_xidx/6.*(z_1pxidx - z_xidx)
+
+        # evaluate spline at boundary 
+        idx = tf.broadcast_to(idx, (y.shape[0], 1))
+        y_b = tf.gather(y, idx, batch_dims=nbatch, axis=-1)
+
+        # replace y by lin for x > x_min
+        extrpl_lin = yp_min*(x-x_min) + y_b
+        cond = x[0,:] <= x_min
+        cond = tf.broadcast_to(cond, (extrpl_lin.shape[0], extrpl_lin.shape[1]))
+        y = tf.where(cond, extrpl_lin, y)
+
+    ## convert back axes
+    y = tf.transpose(y, permrev)
+    return y
+
+
+
 def pchip_interpolate(xi, yi, x, axis=-1):
     '''
         Functionality:
@@ -415,6 +587,7 @@ def qparms_to_quantiles(qparms, x_low = 0., x_high = 1., axis = -1):
     x0shape = list(deltaxnorm.shape)
     x0shape[axis] = 1
     x0 = tf.fill(x0shape, x_low)
+    x0 = tf.cast(x0, tf.float64)
 
     deltaxfull = (x_high - x_low)*deltaxnorm
     deltaxfull = tf.concat([x0, deltaxfull], axis = axis)
