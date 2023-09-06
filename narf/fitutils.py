@@ -61,7 +61,10 @@ def cubic_spline_interpolate(xi, yi, x, axis=-1, extrpl=[None, None]):
     A = tf.linalg.set_diag(A, h[:, 1:-1], k=-1)
 
     uu = u[:,:,None]
-    z = tf.linalg.solve(A, uu)
+    if xi.shape[-1] > 4:
+        z = tf.linalg.solve(A, uu)
+    else:
+        z = tf.linalg.inv(A) @ uu # faster solve 2x2
     z = tf.squeeze(z, axis=axis)
     f = tf.zeros(xi.shape[0], dtype=tf.float64)[:,None]
     z = tf.concat([f, z, f], axis=axis)
@@ -97,11 +100,7 @@ def cubic_spline_interpolate(xi, yi, x, axis=-1, extrpl=[None, None]):
 
     # right side linear extrapolation
     if extrpl[1] != None:
-
-        # get closest x value to the boundary
-        diff = tf.abs(x - extrpl[1])
-        idx = tf.argmin(diff, axis=axis)
-        x_max = tf.gather(x, idx, axis=axis)
+        x_max = tf.reshape(tf.constant(extrpl[1], dtype=tf.float64), (1,1))
 
         # calculate derivative yp_max at boundary
         x_compare_max = x_max[...,None] < xi[..., None, :]
@@ -123,9 +122,8 @@ def cubic_spline_interpolate(xi, yi, x, axis=-1, extrpl=[None, None]):
             z_xidx / (2 * hi_xidx) * (xi_1pxidx - x_max) ** 2 + \
             1./hi_xidx*(yi_1pxidx - yi_xidx) - hi_xidx/6.*(z_1pxidx - z_xidx)
 
-        # evaluate spline at boundary 
-        idx = tf.broadcast_to(idx, (y.shape[0], 1))
-        y_b = tf.gather(y, idx, batch_dims=nbatch, axis=-1)
+        # evaluate spline at boundary
+        y_b = cubic_spline_interpolate(xi, yi, x_max, axis=axis) # check shape of x_max
 
         # replace y by lin for x > x_max
         extrpl_lin = yp_max*(x-x_max) + y_b
@@ -136,11 +134,7 @@ def cubic_spline_interpolate(xi, yi, x, axis=-1, extrpl=[None, None]):
 
     # left side linear extrapolation
     if extrpl[0] != None:
-
-        # get closest x value to the boundary
-        diff = abs(x - extrpl[0])
-        idx = tf.argmin(diff, axis=axis)
-        x_min = tf.gather(x, idx, axis=axis)
+        x_min = tf.reshape(tf.constant(extrpl[0], dtype=tf.float64), (1,1))
 
         # calculate derivative yp_min at boundary
         x_compare_min = x_min[...,None] >= xi[..., None, :]
@@ -162,9 +156,8 @@ def cubic_spline_interpolate(xi, yi, x, axis=-1, extrpl=[None, None]):
             z_xidx / (2 * hi_xidx) * (xi_1pxidx - x_min) ** 2 + \
             1./hi_xidx*(yi_1pxidx - yi_xidx) - hi_xidx/6.*(z_1pxidx - z_xidx)
 
-        # evaluate spline at boundary 
-        idx = tf.broadcast_to(idx, (y.shape[0], 1))
-        y_b = tf.gather(y, idx, batch_dims=nbatch, axis=-1)
+        # evaluate spline at boundary
+        y_b = cubic_spline_interpolate(xi, yi, x_min, axis=axis) # check shape of x_max
 
         # replace y by lin for x > x_min
         extrpl_lin = yp_min*(x-x_min) + y_b
