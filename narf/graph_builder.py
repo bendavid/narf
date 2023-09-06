@@ -7,10 +7,6 @@ import sys
 
 def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
 
-    # TODO make this check more robust and move it to a more appropriate place
-    if hasattr(ROOT, "Eigen") and ("tensorflow" in sys.modules or "jax" in sys.modules):
-        raise RuntimeError("Use of Eigen headers in cling is incompatible with tensorflow and jax because of haphazard exports of possibly-conflicting Eigen symbols.  Avoid the conflict by avoiding use of Eigen or avoiding importing of tensorflow or jax.")
-
     time0 = time.time()
 
     results = []
