@@ -4,8 +4,21 @@ from .ioutils import H5PickleProxy
 import time
 import uuid
 import sys
+import subprocess
 
 def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
+
+    # TODO make this check more robust and move it to a more appropriate place
+    if hasattr(ROOT, "Eigen"):
+        libs = ROOT.gInterpreter.GetSharedLibs().split()
+        check_symbol = "Eigen::internal::TensorBlockScratchAllocator<Eigen::DefaultDevice>::allocate"
+        for lib in libs:
+            if "libtensorflow_framework.so" in lib or "libtensorflow_cc.so" in lib:
+                ret = subprocess.run(f'nm -gDC --just-symbols {lib} | grep "{check_symbol}" | wc -l', capture_output=True, shell=True)
+                if ret.returncode != 0 or ret.stderr:
+                    raise RuntimeError(f"Failed to check symbols in library {lib}: Return code: {ret.returncode}, stderr: {ret.stderr}, stdout: {ret.stdout}")
+                elif int(ret.stdout) != 0:
+                    raise RuntimeError("Tensorflow has been loaded simultaneously with jitted Eigen functions, but the Tensorflow libraries contain conflicting symbols.  Use a Tensorflow build which fixes this problem, or avoid loading the Tensorflow libraries, e.g. from importing the tensorflow python package.")
 
     time0 = time.time()
 
