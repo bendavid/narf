@@ -5,20 +5,34 @@ import time
 import uuid
 import sys
 import subprocess
+import shlex
 
 def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
 
     # TODO make this check more robust and move it to a more appropriate place
     if hasattr(ROOT, "Eigen"):
         libs = ROOT.gInterpreter.GetSharedLibs().split()
-        check_symbol = "Eigen::internal::TensorBlockScratchAllocator<Eigen::DefaultDevice>::allocate"
+        check_symbols = []
+        check_symbols.append(b"Eigen::internal::TensorBlockScratchAllocator<Eigen::DefaultDevice>::allocate")
+        check_symbols.append(b"Eigen::TensorEvaluator<Eigen::TensorSlicingOp<Eigen::DSizes<long, 8> const, Eigen::DSizes<long, 8> const, Eigen::TensorMap<Eigen::Tensor<signed char, 8, 1, long>, 0, Eigen::MakePointer> > const, Eigen::DefaultDevice>::TensorEvaluator(Eigen::TensorSlicingOp<Eigen::DSizes<long, 8> const, Eigen::DSizes<long, 8> const, Eigen::TensorMap<Eigen::Tensor<signed char, 8, 1, long>, 0, Eigen::MakePointer> > const&, Eigen::DefaultDevice const&)")
+
         for lib in libs:
             if "libtensorflow_framework.so" in lib or "libtensorflow_cc.so" in lib:
-                ret = subprocess.run(f'nm -gDC --just-symbols {lib} | grep "{check_symbol}" | wc -l', capture_output=True, shell=True)
-                if ret.returncode != 0 or ret.stderr:
-                    raise RuntimeError(f"Failed to check symbols in library {lib}: Return code: {ret.returncode}, stderr: {ret.stderr}, stdout: {ret.stdout}")
-                elif int(ret.stdout) != 0:
-                    raise RuntimeError("Tensorflow has been loaded simultaneously with jitted Eigen functions, but the Tensorflow libraries contain conflicting symbols.  Use a Tensorflow build which fixes this problem, or avoid loading the Tensorflow libraries, e.g. from importing the tensorflow python package.")
+                proc = subprocess.Popen(shlex.split(f"nm -gDC --just-symbols {lib}"), stdout=subprocess.PIPE)
+
+                for symbol in proc.stdout:
+                    for check_symbol in check_symbols:
+                        if check_symbol in symbol:
+                            raise RuntimeError("Tensorflow has been loaded simultaneously with jitted Eigen functions, but the Tensorflow libraries contain conflicting symbols.  Use a Tensorflow build which fixes this problem, or avoid loading the Tensorflow libraries, e.g. from importing the tensorflow python package.")
+
+                try:
+                    ret = proc.wait(5)
+                except:
+                    proc.kill()
+                    raise TimeoutError(f"Failed to check symbols in library {lib}")
+
+                if ret != 0:
+                    raise RuntimeError(f"Failed to check symbols in library {lib}: Return code: {ret}")
 
     time0 = time.time()
 
