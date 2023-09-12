@@ -59,3 +59,13 @@ def function_to_tflite(func, input_signature):
 
 
 
+def function_to_saved_model(func, input_signature, output):
+
+    class Export_Module(tf.Module):
+        @tf.function(input_signature = input_signature)
+        def __call__(self, *args):
+            return func(*args)
+
+    model = Export_Module()
+
+    tf.saved_model.save(model, output)
