@@ -43,10 +43,12 @@ def function_to_tflite(func, input_signature):
     concrete_function = module.__call__.get_concrete_function()
     converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_function], module)
 
+    # enable TenorFlow ops and DISABLE builtin TFLite ops since these apparently slow things down
     converter.target_spec.supported_ops = [
-    tf.lite.OpsSet.TFLITE_BUILTINS, # enable TensorFlow Lite ops.
     tf.lite.OpsSet.SELECT_TF_OPS # enable TensorFlow ops.
     ]
+
+    converter._experimental_allow_all_select_tf_ops = True
 
     tflite_model = converter.convert()
 
