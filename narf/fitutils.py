@@ -54,17 +54,13 @@ def cubic_spline_interpolate(xi, yi, x, axis=-1, extrpl=[None, None]):
     u = 6 * (b[:, 1:] - b[:, :-1])
 
     shape = (xi.shape[0], xi.shape[-1]-2, xi.shape[-1]-2)
-    A = tf.zeros(shape, dtype=tf.float64)
-
-    A = tf.linalg.set_diag(A, v)
-    A = tf.linalg.set_diag(A, h[:, 1:-1], k=1)
-    A = tf.linalg.set_diag(A, h[:, 1:-1], k=-1)
-
     uu = u[:,:,None]
-    if xi.shape[-1] > 4:
-        z = tf.linalg.solve(A, uu)
-    else:
-        z = tf.linalg.inv(A) @ uu # faster solve 2x2
+
+    diag = v
+    superdiag = h[:, 1:-1]
+    subdiag = superdiag
+
+    z = tf.linalg.tridiagonal_solve(diagonals = [superdiag, diag, subdiag], rhs = uu, diagonals_format = "sequence")
     z = tf.squeeze(z, axis=axis)
     f = tf.zeros(xi.shape[0], dtype=tf.float64)[:,None]
     z = tf.concat([f, z, f], axis=axis)
