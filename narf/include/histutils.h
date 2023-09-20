@@ -405,6 +405,19 @@ namespace narf {
   struct is_array_interface_view<array_interface_view<T, NDims>> : public std::true_type{
   };
 
+
+  // helper for bin lookup which implements the compile-time loop over axes
+  template<typename HIST, typename... Xs, std::size_t... Idxs>
+  auto const &get_value_impl(const HIST &hist, std::index_sequence<Idxs...>, const Xs&... xs) {
+      return hist.at(hist.template axis<Idxs>().index(xs)...);
+  }
+
+  // variadic templated bin lookup
+  template<typename HIST, typename... Xs>
+  auto const &get_value(const HIST &hist, const Xs&... xs) {
+      return get_value_impl(hist, std::index_sequence_for<Xs...>{}, xs...);
+  }
+
 }
 
 // template <typename T, typename... Args>
