@@ -25,26 +25,18 @@ def function_to_tflite(funcs, input_signatures):
     arg_string = []
     for iif, input_signature in enumerate(input_signatures):
         inputs = []
-        if input_signature == None or input_signature == "":
-            inputs.append("")
-        else:
-            for i in range(len(input_signature)):
-                input_name = f"input_{iif:05d}_{i:05d}"
-                inputs.append(input_name)
+        for i in range(len(input_signature)):
+            input_name = f"input_{iif:05d}_{i:05d}"
+            inputs.append(input_name)
         arg_string.append(", ".join(inputs))
 
     def_string = ""
     def_string += "def make_module(wrapped_func, input_signatures):\n"
     def_string += "    class Export_Module(tf.Module):\n"
     for i, func in enumerate(funcs):
-        if arg_string[i] == "":
-            def_string += f"        @tf.function()\n"
-            def_string += f"        def {func.__name__}(self):\n"
-            def_string += f"            return wrapped_func({i})\n"
-        else:
-            def_string += f"        @tf.function(input_signature = input_signatures[{i}])\n"
-            def_string += f"        def {func.__name__}(self, {arg_string[i]}):\n"
-            def_string += f"            return wrapped_func({i}, {arg_string[i]})\n"
+        def_string += f"        @tf.function(input_signature = input_signatures[{i}])\n"
+        def_string += f"        def {func.__name__}(self, {arg_string[i]}):\n"
+        def_string += f"            return wrapped_func({i}, {arg_string[i]})\n"
     def_string += "    return Export_Module"
 
     ldict = {}
@@ -54,7 +46,6 @@ def function_to_tflite(funcs, input_signatures):
     Export_Module = make_module(wrapped_func, input_signatures)
 
     module = Export_Module()
-    #concrete_function = module.__call__.get_concrete_function()
     concrete_functions = [getattr(module, func_name).get_concrete_function() for func_name in [f.__name__ for f in funcs]]
     converter = tf.lite.TFLiteConverter.from_concrete_functions(concrete_functions, module)
 
