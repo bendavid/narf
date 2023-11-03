@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-def function_to_tflite(funcs, input_signatures):
+def function_to_tflite(funcs, input_signatures, func_names=""):
     """Convert function to tflite model using python dynamic execution trickery to ensure that inputs
     and outputs are alphabetically ordered, since this is apparently the only way to prevent tflite from
     scrambling them"""
@@ -8,6 +8,8 @@ def function_to_tflite(funcs, input_signatures):
     if not isinstance(funcs, list):
         funcs = [funcs]
         input_signatures = [input_signatures]
+        func_names = [func_names]
+    func_names = [funcs[iif].__name__ if func_names[iif]=="" else func_names[iif] for iif in range(len(funcs))]
 
     def wrapped_func(iif, *args):
         outputs = funcs[iif](*args)
@@ -35,7 +37,7 @@ def function_to_tflite(funcs, input_signatures):
     def_string += "    class Export_Module(tf.Module):\n"
     for i, func in enumerate(funcs):
         def_string += f"        @tf.function(input_signature = input_signatures[{i}])\n"
-        def_string += f"        def {func.__name__}(self, {arg_string[i]}):\n"
+        def_string += f"        def {func_names[i]}(self, {arg_string[i]}):\n"
         def_string += f"            return wrapped_func({i}, {arg_string[i]})\n"
     def_string += "    return Export_Module"
 
@@ -46,7 +48,7 @@ def function_to_tflite(funcs, input_signatures):
     Export_Module = make_module(wrapped_func, input_signatures)
 
     module = Export_Module()
-    concrete_functions = [getattr(module, func_name).get_concrete_function() for func_name in [f.__name__ for f in funcs]]
+    concrete_functions = [getattr(module, func_name).get_concrete_function() for func_name in func_names]
     converter = tf.lite.TFLiteConverter.from_concrete_functions(concrete_functions, module)
 
     # enable TenorFlow ops and DISABLE builtin TFLite ops since these apparently slow things down
