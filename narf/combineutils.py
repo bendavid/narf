@@ -79,6 +79,12 @@ class FitInputData:
             self.noigroupidxs = f['hnoigroupidxs'][...]
             self.maskedchans = f['hmaskedchans'][...]
 
+            # reference meta data if available
+            self.metadata = {}
+            if "meta" in f.keys():
+                from narf.ioutils import pickle_load_h5py
+                self.metadata = pickle_load_h5py(f["meta"])
+
             #load arrays from file
             hconstraintweights = f['hconstraintweights']
             hdata_obs = f['hdata_obs']
