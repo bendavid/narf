@@ -142,6 +142,13 @@ if args.saveHists:
         hist_postfit_inclusive.variances()[...] = memoryview(exp_post_inclusive_var)
         results["hist_postfit_inclusive"] = narf.ioutils.H5PickleProxy(hist_postfit_inclusive)
 
-
+# pass meta data into output file
+meta = {
+    "signals": fitter.indata.signals,
+    "procs": fitter.indata.procs,
+    **fitter.indata.metadata
+}
+results["meta"] = narf.ioutils.H5PickleProxy(meta)
+ 
 with h5py.File(args.output, "w") as fout:
     narf.ioutils.pickle_dump_h5py("results", results, fout)
