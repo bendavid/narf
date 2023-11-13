@@ -143,7 +143,9 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
         python_axes = hist_hist.axes
         cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
 
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
+    # FIXME using std.move here would prevent some extra copying but causes mysterious template errors
+    # cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
+    cppaxes = [convert_axis(axis) for axis in python_axes]
 
     pyroot_boost_hist = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
 
