@@ -118,15 +118,16 @@ if args.saveHists:
 
         shape_proc = [*shape, fitter.indata.nproc]
 
-        hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
-        hist_data_obs.values()[...] = memoryview(tf.reshape(fitter.indata.data_obs[ibin:stop], shape))
-        hist_data_obs.variances()[...] = hist_data_obs.values()
-        results["hist_data_obs"][channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
+        if "masked" not in channel:
+            hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
+            hist_data_obs.values()[...] = memoryview(tf.reshape(fitter.indata.data_obs[ibin:stop], shape))
+            hist_data_obs.variances()[...] = hist_data_obs.values()
+            results["hist_data_obs"][channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
 
-        hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
-        hist_nobs.values()[...] = memoryview(tf.reshape(fitter.nobs.value()[ibin:stop], shape))
-        hist_nobs.variances()[...] = hist_nobs.values()
-        results["hist_nobs"][channel] = narf.ioutils.H5PickleProxy(hist_nobs)
+            hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
+            hist_nobs.values()[...] = memoryview(tf.reshape(fitter.nobs.value()[ibin:stop], shape))
+            hist_nobs.variances()[...] = hist_nobs.values()
+            results["hist_nobs"][channel] = narf.ioutils.H5PickleProxy(hist_nobs)
 
         hist_prefit = hist.Hist(*axes, fitter.indata.axis_procs, storage=hist.storage.Weight(), name = "prefit", label = "prefit expected number of events")
         hist_prefit.values()[...] = memoryview(tf.reshape(exp_pre_per_process[ibin:stop,:], shape_proc))

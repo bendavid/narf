@@ -124,9 +124,10 @@ class FitInputData:
                 self.channel_axes = self.metadata["channel_axes"]
             else:
                 self.channel_axes = {
-                    "ch1": [hist.axis.Integer(0, self.nbins, underflow=False, overflow=False, name="obs")]
+                    "ch0": [hist.axis.Integer(0, self.nbins, underflow=False, overflow=False, name="obs")]
                 }
-                self.channel_axes["ch2"] = [hist.axis.Integer(0, self.nbinsmasked, underflow=False, overflow=False, name="masked")]
+                if self.nbinsmasked > 0:
+                    self.channel_axes["ch1_masked"] = [hist.axis.Integer(0, self.nbinsmasked, underflow=False, overflow=False, name="masked")]
 
             self.axis_procs = hist.axis.StrCategory(self.procs, name="processes")                
 
