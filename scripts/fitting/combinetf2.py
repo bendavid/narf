@@ -6,6 +6,9 @@ import narf.combineutils
 import argparse
 import narf.ioutils
 
+import pdb
+
+
 parser =  argparse.ArgumentParser()
 
 parser.add_argument("filename", help="filename of the main hdf5 input")
@@ -28,26 +31,7 @@ fitter = narf.combineutils.Fitter(indata, args)
 if args.toys == -1:
     fitter.nobs.assign(fitter._compute_yields_inclusive())
 
-
-results = {}
-
 if args.saveHists:
-    nbins = fitter.indata.nbins
-    nbinsfull = fitter.indata.nbinsfull
-
-    axis_obs = hist.axis.Integer(0, nbins, underflow=False, overflow=False, name="obs")
-    axis_obsfull = hist.axis.Integer(0, nbinsfull, underflow=False, overflow=False, name="obsfull")
-    axis_procs = hist.axis.StrCategory(fitter.indata.procs, name="processes")
-
-    hist_data_obs = hist.Hist(axis_obs, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
-    hist_data_obs.values()[...] = memoryview(fitter.indata.data_obs)
-    hist_data_obs.variances()[...] = hist_data_obs.values()
-    results["hist_data_obs"] = narf.ioutils.H5PickleProxy(hist_data_obs)
-
-    hist_nobs = hist.Hist(axis_obs, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
-    hist_nobs.values()[...] = memoryview(fitter.nobs.value())
-    hist_nobs.variances()[...] = hist_nobs.values()
-    results["hist_nobs"] = narf.ioutils.H5PickleProxy(hist_nobs)
 
     invhessianprefit = fitter.prefit_covariance()
 
@@ -56,21 +40,8 @@ if args.saveHists:
 
     exp_pre_per_process = fitter.expected_events_per_process()
 
-    hist_prefit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Weight(), name = "prefit", label = "prefit expected number of events")
-    hist_prefit.values()[...] = memoryview(exp_pre_per_process)
-    hist_prefit.variances()[...] = 0.
-    results["hist_prefit"] = narf.ioutils.H5PickleProxy(hist_prefit)
-
     if args.computeHistErrors:
         exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance(invhessianprefitchol)
-
-        hist_prefit_inclusive = hist.Hist(axis_obsfull, storage=hist.storage.Weight(), name = "prefit_inclusive", label = "prefit expected number of events for all processes combined")
-        hist_prefit_inclusive.values()[...] = memoryview(exp_pre_inclusive)
-        hist_prefit_inclusive.variances()[...] = memoryview(exp_pre_inclusive_var)
-        results["hist_prefit_inclusive"] = narf.ioutils.H5PickleProxy(hist_prefit_inclusive)
-
-
-
 
 if args.toys >= 0:
     fitter.minimize()
@@ -78,7 +49,6 @@ if args.toys >= 0:
 val, grad, hess = fitter.loss_val_grad_hess()
 
 cov = tf.linalg.inv(hess)
-
 
 
 if args.externalPostfit is not None:
@@ -120,7 +90,7 @@ if args.externalPostfit is not None:
 
 
 
-
+results = {}
 
 if args.saveHists:
 
@@ -128,19 +98,60 @@ if args.saveHists:
 
     exp_post_per_process = fitter.expected_events_per_process()
 
-    hist_postfit = hist.Hist(axis_obsfull, axis_procs, storage=hist.storage.Weight(), name = "postfit", label = "postfit expected number of events")
-    hist_postfit.values()[...] = memoryview(exp_post_per_process)
-    hist_postfit.variances()[...] = 0.
-    results["hist_postfit"] = narf.ioutils.H5PickleProxy(hist_postfit)
-
     if args.computeHistErrors:
-
         exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(covchol_ext)
 
-        hist_postfit_inclusive = hist.Hist(axis_obsfull, storage=hist.storage.Weight(), name = "postfit_inclusive", label = "postfit expected number of events for all processes combined")
-        hist_postfit_inclusive.values()[...] = memoryview(exp_post_inclusive)
-        hist_postfit_inclusive.variances()[...] = memoryview(exp_post_inclusive_var)
-        results["hist_postfit_inclusive"] = narf.ioutils.H5PickleProxy(hist_postfit_inclusive)
+    results.update({
+        "hist_data_obs":{},
+        "hist_nobs":{},
+        "hist_prefit":{},
+        "hist_postfit":{},
+        "hist_prefit_inclusive":{},
+        "hist_postfit_inclusive":{},
+    })
+
+    ibin = 0
+    for channel, axes in fitter.indata.channel_axes.items():
+
+        shape = [len(a) for a in axes]
+        stop = ibin+np.product(shape)
+
+        shape_proc = [*shape, fitter.indata.nproc]
+
+        if "masked" not in channel:
+            hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
+            hist_data_obs.values()[...] = memoryview(tf.reshape(fitter.indata.data_obs[ibin:stop], shape))
+            hist_data_obs.variances()[...] = hist_data_obs.values()
+            results["hist_data_obs"][channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
+
+            hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
+            hist_nobs.values()[...] = memoryview(tf.reshape(fitter.nobs.value()[ibin:stop], shape))
+            hist_nobs.variances()[...] = hist_nobs.values()
+            results["hist_nobs"][channel] = narf.ioutils.H5PickleProxy(hist_nobs)
+
+        hist_prefit = hist.Hist(*axes, fitter.indata.axis_procs, storage=hist.storage.Weight(), name = "prefit", label = "prefit expected number of events")
+        hist_prefit.values()[...] = memoryview(tf.reshape(exp_pre_per_process[ibin:stop,:], shape_proc))
+        hist_prefit.variances()[...] = 0.
+        results["hist_prefit"][channel] = narf.ioutils.H5PickleProxy(hist_prefit)
+
+        hist_postfit = hist.Hist(*axes, fitter.indata.axis_procs, storage=hist.storage.Weight(), name = "postfit", label = "postfit expected number of events")
+        hist_postfit.values()[...] = memoryview(tf.reshape(exp_post_per_process[ibin:stop,:], shape_proc))
+        hist_postfit.variances()[...] = 0.
+        results["hist_postfit"][channel] = narf.ioutils.H5PickleProxy(hist_postfit)
+
+        if args.computeHistErrors:
+            hist_prefit_inclusive = hist.Hist(*axes, storage=hist.storage.Weight(), name = "prefit_inclusive", label = "prefit expected number of events for all processes combined")
+            hist_prefit_inclusive.values()[...] = memoryview(tf.reshape(exp_pre_inclusive[ibin:stop], shape))
+            hist_prefit_inclusive.variances()[...] = memoryview(tf.reshape(exp_pre_inclusive_var[ibin:stop], shape))
+            results["hist_prefit_inclusive"][channel] = narf.ioutils.H5PickleProxy(hist_prefit_inclusive)
+
+            hist_postfit_inclusive = hist.Hist(*axes, storage=hist.storage.Weight(), name = "postfit_inclusive", label = "postfit expected number of events for all processes combined")
+            hist_postfit_inclusive.values()[...] = memoryview(tf.reshape(exp_post_inclusive[ibin:stop], shape))
+            hist_postfit_inclusive.variances()[...] = memoryview(tf.reshape(exp_post_inclusive_var[ibin:stop], shape))
+            results["hist_postfit_inclusive"][channel] = narf.ioutils.H5PickleProxy(hist_postfit_inclusive)
+
+        ibin = stop
+
 
 # pass meta data into output file
 meta = {

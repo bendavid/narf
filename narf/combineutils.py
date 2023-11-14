@@ -3,6 +3,7 @@ import tensorflow_io as tfio
 import numpy as np
 import scipy
 import h5py
+import hist
 
 class SimpleSparseTensor:
     def __init__(self, indices, values, dense_shape):
@@ -79,12 +80,6 @@ class FitInputData:
             self.noigroupidxs = f['hnoigroupidxs'][...]
             self.maskedchans = f['hmaskedchans'][...]
 
-            # reference meta data if available
-            self.metadata = {}
-            if "meta" in f.keys():
-                from narf.ioutils import pickle_load_h5py
-                self.metadata = pickle_load_h5py(f["meta"])
-
             #load arrays from file
             hconstraintweights = f['hconstraintweights']
             hdata_obs = f['hdata_obs']
@@ -120,6 +115,21 @@ class FitInputData:
             self.npoly1dreggroups = len(self.poly1dreggroups)
             self.npoly2dreggroups = len(self.poly2dreggroups)
             self.nnoigroups = len(self.noigroups)
+
+            # reference meta data if available
+            self.metadata = {}
+            if "meta" in f.keys():
+                from narf.ioutils import pickle_load_h5py
+                self.metadata = pickle_load_h5py(f["meta"])
+                self.channel_axes = self.metadata["channel_axes"]
+            else:
+                self.channel_axes = {
+                    "ch0": [hist.axis.Integer(0, self.nbins, underflow=False, overflow=False, name="obs")]
+                }
+                if self.nbinsmasked > 0:
+                    self.channel_axes["ch1_masked"] = [hist.axis.Integer(0, self.nbinsmasked, underflow=False, overflow=False, name="masked")]
+
+            self.axis_procs = hist.axis.StrCategory(self.procs, name="processes")                
 
             #build tensorflow graph for likelihood calculation
 
