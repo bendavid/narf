@@ -5,6 +5,7 @@ import tensorflow as tf
 import narf.combineutils
 import argparse
 import narf.ioutils
+import os
 
 import pdb
 
@@ -42,6 +43,8 @@ if args.saveHists:
 
     if args.computeHistErrors:
         exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance(invhessianprefitchol)
+
+chi2_prefit = fitter.chi2(fitter.prefit_covariance())
 
 if args.toys >= 0:
     fitter.minimize()
@@ -88,9 +91,13 @@ if args.externalPostfit is not None:
     fitter.x.assign(xvals)
     cov = tf.convert_to_tensor(covval)
 
+chi2_postfit = fitter.chi2(cov)
 
-
-results = {}
+results = {
+    "ndf": fitter.indata.nbins - fitter.indata.nnoigroups - fitter.indata.nsignals,
+    "chi2_prefit": chi2_prefit,
+    "chi2_postfit": chi2_postfit
+}
 
 if args.saveHists:
 
@@ -160,6 +167,11 @@ meta = {
     **fitter.indata.metadata
 }
 results["meta"] = narf.ioutils.H5PickleProxy(meta)
- 
+
+outfolder = os.path.dirname(args.output)
+if not os.path.exists(outfolder):
+    print(f"Creating output folder {outfolder}")
+    os.makedirs(outfolder)
+    
 with h5py.File(args.output, "w") as fout:
     narf.ioutils.pickle_dump_h5py("results", results, fout)

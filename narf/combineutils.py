@@ -208,6 +208,11 @@ class Fitter:
         invhessianprefit = tf.linalg.diag(tf.concat([var_poi, var_theta], axis = 0))
         return invhessianprefit
 
+    def chi2(self, invhess):
+        chi2 = self._chi2_pedantic(self._compute_yields_inclusive, self.indata.data_obs, invhess)
+        chi2_val = np.array([1])
+        chi2_val[...] = memoryview(chi2)
+        return chi2_val[0]
 
     @tf.function
     def val_jac(self, fun, *args, **kwargs):
@@ -240,6 +245,29 @@ class Fitter:
         sRJ2 = tf.reduce_sum(RJ**2, axis=0)
         sRJ2 = tf.reshape(sRJ2, expected.shape)
         return expected, sRJ2
+
+    def _chi2_pedantic(self, fun_exp, observed, invhess):
+        # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
+        # (extremely cpu and memory-inefficient version for validation purposes only)
+
+        with tf.GradientTape() as t:
+            expected = fun_exp()
+            J = t.jacobian(expected, self.x)
+
+        residual = observed - expected
+        residual_flat = tf.reshape(residual, (-1, 1))
+
+        # error propagation of covariance between nuisances into covariance between bins
+        K = J @invhess @ tf.transpose(J)
+        # add data uncertainty on covariance
+        K = K + tf.linalg.diag(observed)
+
+        Kinv = tf.linalg.inv(K)
+
+        # chi2 = uT*Kinv*u
+        chi_square_value = tf.transpose(residual_flat) @ Kinv @ residual_flat
+
+        return chi_square_value
 
     def _experr_pedantic(self, fun_exp, invhess):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
