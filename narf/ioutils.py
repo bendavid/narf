@@ -8,6 +8,10 @@ import numpy as np
 import uuid
 import copyreg
 import io
+import datetime
+import subprocess
+import os, sys
+import re
 
 MIN_PROTOCOL_VERSION = 1
 CURRENT_PROTOCOL_VERSION = 1
@@ -302,3 +306,33 @@ def pickle_load_h5py(h5group):
 
     unpickler = H5Unpickler(h5group)
     return unpickler.load()
+
+def script_command_to_str(argv, parser_args):
+    call_args = np.array(argv[1:], dtype=object)
+    match_expr = "|".join(["^-+([a-z]+[1-9]*-*)+"]+([] if not parser_args else [f"^-*{x.replace('_', '.')}" for x in vars(parser_args).keys()]))
+    if call_args.size != 0:
+        flags = np.vectorize(lambda x: bool(re.match(match_expr, x)))(call_args)
+        special_chars = np.vectorize(lambda x: not x.isalnum())(call_args)
+        select = ~flags & special_chars
+        if np.count_nonzero(select):
+            call_args[select] = np.vectorize(lambda x: f"'{x}'")(call_args[select])
+    return " ".join([argv[0], *call_args])
+
+def make_meta_info_dict(exclude_diff='notebooks', args=None):
+    meta_data = {
+        "time" : str(datetime.datetime.now()), 
+        "command" : script_command_to_str(sys.argv, args),
+        "args": {a: getattr(args,a) for a in vars(args)} if args else {}
+    }
+
+    if subprocess.call(["git", "branch"], stderr=subprocess.STDOUT, stdout=open(os.devnull, 'w')) != 0:
+        meta_data["git_info"] = {"hash" : "Not a git repository!",
+                "diff" : "Not a git repository"}
+    else:
+        meta_data["git_hash"] = subprocess.check_output(['git', 'log', '-1', '--format="%H"'], encoding='UTF-8')
+        diff_comm = ['git', 'diff']
+        if exclude_diff:
+            diff_comm.extend(['--', f":!{exclude_diff}"])
+        meta_data["git_diff"] = subprocess.check_output(diff_comm, encoding='UTF-8')
+
+    return meta_data
