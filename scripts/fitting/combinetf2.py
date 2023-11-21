@@ -162,6 +162,7 @@ if args.saveHists:
 
 # pass meta data into output file
 meta = {
+    "meta_info_combinetf2" : narf.ioutils.make_meta_info_dict(args=args),
     "signals": fitter.indata.signals,
     "procs": fitter.indata.procs,
     **fitter.indata.metadata
