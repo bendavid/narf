@@ -244,6 +244,9 @@ class Fitter:
         RJ = t1.jacobian(RJu, u)
         sRJ2 = tf.reduce_sum(RJ**2, axis=0)
         sRJ2 = tf.reshape(sRJ2, expected.shape)
+        # add MC stat uncertainty on variance
+        sumw2 = tf.square(expected)/self.indata.kstat
+        sRJ2 = sRJ2 + sumw2
         return expected, sRJ2
 
     def _chi2_pedantic(self, fun_exp, observed, invhess):
@@ -261,7 +264,10 @@ class Fitter:
         K = J @invhess @ tf.transpose(J)
         # add data uncertainty on covariance
         K = K + tf.linalg.diag(observed)
-
+        # add MC stat uncertainty on covariance
+        sumw2 = tf.square(expected)/self.indata.kstat
+        K = K + tf.linalg.diag(sumw2)
+        
         Kinv = tf.linalg.inv(K)
 
         # chi2 = uT*Kinv*u
@@ -282,6 +288,10 @@ class Fitter:
 
         err = tf.linalg.diag_part(cov)
         err = tf.reshape(err, expected.shape)
+
+        # add MC stat uncertainty on variance
+        sumw2 = tf.square(expected)/self.indata.kstat
+        err = err + sumw2
 
         return expected, err
 
