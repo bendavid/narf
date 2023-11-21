@@ -261,7 +261,10 @@ class Fitter:
         K = J @invhess @ tf.transpose(J)
         # add data uncertainty on covariance
         K = K + tf.linalg.diag(observed)
-
+        # add MC stat uncertainty on covariance
+        sumw2 = tf.square(expected)/self.indata.kstat
+        K = K + tf.linalg.diag(sumw2)
+        
         Kinv = tf.linalg.inv(K)
 
         # chi2 = uT*Kinv*u
