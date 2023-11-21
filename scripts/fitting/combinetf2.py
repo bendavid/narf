@@ -21,7 +21,7 @@ parser.add_argument("--allowNegativePOI", default=False, action='store_true', he
 parser.add_argument("--POIDefault", default=1., type=float, help="mode for POI's")
 parser.add_argument("--saveHists", default=False, action='store_true', help="save prefit and postfit histograms")
 parser.add_argument("--computeHistErrors", default=False, action='store_true', help="propagate uncertainties to prefit and postfit histograms")
-parser.add_argument("--binByBinStat", default=False, action='store_true', help="add bin-by-bin statistical uncertainties on templates (using Barlow and Beeston 'lite' method")
+parser.add_argument("--binByBinStat", default=False, action='store_true', help="add bin-by-bin statistical uncertainties on templates (adding sumW2 on variance)")
 parser.add_argument("--externalPostfit", default=None, help="load posfit nuisance parameters and covariance from result of an external fit")
 
 args = parser.parse_args()
