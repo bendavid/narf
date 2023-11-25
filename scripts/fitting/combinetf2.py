@@ -23,10 +23,11 @@ parser.add_argument("--saveHists", default=False, action='store_true', help="sav
 parser.add_argument("--computeHistErrors", default=False, action='store_true', help="propagate uncertainties to prefit and postfit histograms")
 parser.add_argument("--binByBinStat", default=False, action='store_true', help="add bin-by-bin statistical uncertainties on templates (adding sumW2 on variance)")
 parser.add_argument("--externalPostfit", default=None, help="load posfit nuisance parameters and covariance from result of an external fit")
+parser.add_argument("--pseudoData", default=None, type=str, help="run fit on pseudo data with the given name")
 
 args = parser.parse_args()
 
-indata = narf.combineutils.FitInputData(args.filename)
+indata = narf.combineutils.FitInputData(args.filename, args.pseudoData)
 fitter = narf.combineutils.Fitter(indata, args)
 
 if args.toys == -1:
