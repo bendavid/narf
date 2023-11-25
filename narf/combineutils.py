@@ -79,7 +79,10 @@ class FitInputData:
             self.noigroups = f['hnoigroups'][...]
             self.noigroupidxs = f['hnoigroupidxs'][...]
             self.maskedchans = f['hmaskedchans'][...]
-            self.pseudodatanames = f['hpseudodatanames'][...].astype(str)
+            if "hpseudodatanames" in f.keys():
+                self.pseudodatanames = f['hpseudodatanames'][...].astype(str)
+            else:
+                self.pseudodatanames = []
 
             #load arrays from file
             hconstraintweights = f['hconstraintweights']
