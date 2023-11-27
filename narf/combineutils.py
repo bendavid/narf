@@ -36,7 +36,7 @@ def makesparsetensor(h5group):
     return SimpleSparseTensor(indices,values,dense_shape)
 
 class FitInputData:
-    def __init__(self, filename):
+    def __init__(self, filename, pseudodata=None):
         with h5py.File(filename, mode='r') as f:
 
             #load text arrays from file
@@ -79,10 +79,15 @@ class FitInputData:
             self.noigroups = f['hnoigroups'][...]
             self.noigroupidxs = f['hnoigroupidxs'][...]
             self.maskedchans = f['hmaskedchans'][...]
+            if "hpseudodatanames" in f.keys():
+                self.pseudodatanames = f['hpseudodatanames'][...].astype(str)
+            else:
+                self.pseudodatanames = []
 
             #load arrays from file
             hconstraintweights = f['hconstraintweights']
             hdata_obs = f['hdata_obs']
+
             self.sparse = not 'hnorm' in f
 
             if self.sparse:
@@ -135,7 +140,22 @@ class FitInputData:
 
             #start by creating tensors which read in the hdf5 arrays (optimized for memory consumption)
             self.constraintweights = maketensor(hconstraintweights)
-            self.data_obs = maketensor(hdata_obs)
+
+            #load data/pseudodata
+            if pseudodata is not None:
+                if pseudodata in self.pseudodatanames:
+                    pseudodata_idx = np.where(self.pseudodatanames == pseudodata)[0][0]
+                else:
+                    raise Exception("Pseudodata %s not found, available pseudodata sets are %s" % (pseudodata, self.pseudodatanames))
+                print("Run pseudodata fit for index %i: " % (pseudodata_idx))
+                print(self.pseudodatanames[pseudodata_idx])
+                hdata_obs = f['hpseudodata']
+
+                data_obs = maketensor(hdata_obs)
+                self.data_obs = data_obs[:, pseudodata_idx]
+            else:
+                self.data_obs = maketensor(hdata_obs)
+
             hkstat = f['hkstat']
             self.kstat = maketensor(hkstat)
 
