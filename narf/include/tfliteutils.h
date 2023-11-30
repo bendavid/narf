@@ -8,6 +8,15 @@
 #include <tbb/task_arena.h>
 #include <algorithm>
 
+// #include "tensorflow/Eigen/Core"
+// #include "eigen3/Eigen/Core"
+// #include "tensorflow/core/platform/platform.h"
+// #include "tensorflow/cc/saved_model/loader.h"
+// #include <tensorflow/core/public/session.h>
+
+
+// #define EIGEN_DONT_PARALLELIZE
+
 namespace narf {
 
     class tflite_interpreter_data {
@@ -117,6 +126,7 @@ namespace narf {
 
                 interpreters_.reserve(nslots_actual);
                 for (unsigned int islot = 0; islot < nslots_actual; ++islot) {
+                    std::cout << "init interpreter " << islot << std::endl;
                     interpreters_.emplace_back(builder, signature);
                 }
         }

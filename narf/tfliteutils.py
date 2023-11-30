@@ -24,5 +24,53 @@ if not loaded_lite and "libtensorflow_cc.so" not in ROOT.gInterpreter.GetSharedL
     if ret != 0:
         raise RuntimeError("Failed to load libtensorflow_cc.so")
 
-narf.clingutils.Declare('#include "tfliteutils.h"')
+narf.clingutils.Load(f"{narf.common.base_dir}/narf/lib/libnarf.so")
 
+# ROOT.gInterpreter.AddIncludePath(f"/usr/include/tensorflow")
+# ROOT.gInterpreter.AddIncludePath(f"/usr/include/eigen3")
+
+narf.clingutils.Declare('#include "tfliteutils.h"')
+narf.clingutils.Declare('#include "tfccutils.h"')
+# narf.clingutils.Declare('#include "tfcutils.h"')
+#
+# print("testing tf c interface")
+# #
+# #
+# model = "/scratch/submit/cms/jbendavi/wmassdev49/WRemnants/wremnants-data/data/calibration/muon_response"
+#
+#
+#
+# input("wait pre")
+#
+# # helpers = []
+#
+# # for i in range(128):
+#     # helper = ROOT.narf.tf_session(model)
+#     # helpers.append(helper)
+#
+# helper = ROOT.narf.tf_session(model)
+
+# input("wait post")
+
+
+
+# ROOT.gSystem.AddIncludePath("/usr/include/tensorflow")
+
+# ROOT.gROOT.ProcessLine(f".L {narf.common.base_dir}/narf/src/tfccutils.cpp+")
+
+# ROOT.gSystem.CompileMacro(f"{narf.common.base_dir}/narf/src/tfccutils.cpp")
+
+#Singularity> g++ -std=c++17 -O3 -march=x86-64-v3 -shared -fpic -I/usr/include/tensorflow -Ltensorflow-cc -o testtfcc.so testtfcc.cpp
+
+# print("testing tf cc interface")
+#
+# input("wait pre")
+#
+# helper = ROOT.narf.tf_helper(model, "serving_default", 128)
+#
+# # helpers = []
+# # for i in range(128):
+# #     helper = ROOT.narf.tf_model_data(model, "serving_default")
+# #     helpers.append(helper)
+#
+# input("wait post")

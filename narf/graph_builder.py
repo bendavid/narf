@@ -58,6 +58,7 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
             lumihelper = make_lumihelper(dataset.lumi_csv)
             print("making df")
             lumidf = ROOT.ROOT.RDataFrame(chain)
+            # ROOT.ROOT.RDF.Experimental.AddProgressBar(lumidf)
             if jsonhelper is not None:
                 print("adding lumi filter")
                 print(jsonhelper)
@@ -79,6 +80,7 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
 
         print("event df")
         df = ROOT.ROOT.RDataFrame(chain)
+        # ROOT.ROOT.RDF.Experimental.AddProgressBar(df)
         if jsonhelper is not None:
             df = df.Filter(jsonhelper, [run_col, lumi_col], "jsonhelper")
 
