@@ -6,6 +6,7 @@ import uuid
 import sys
 import subprocess
 import shlex
+import narf.rdfutils
 
 def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
 
@@ -36,10 +37,12 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
 
     time0 = time.time()
 
+    dfs = []
     results = []
     hweights = []
     evtcounts = []
     chains = []
+    lumidfs = []
     lumisums = {}
 
     for dataset in datasets:
@@ -58,6 +61,7 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
             lumihelper = make_lumihelper(dataset.lumi_csv)
             print("making df")
             lumidf = ROOT.ROOT.RDataFrame(chain)
+            lumidfs.append(lumidf)
             if jsonhelper is not None:
                 print("adding lumi filter")
                 print(jsonhelper)
@@ -79,6 +83,7 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
 
         print("event df")
         df = ROOT.ROOT.RDataFrame(chain)
+        dfs.append(df)
         if jsonhelper is not None:
             df = df.Filter(jsonhelper, [run_col, lumi_col], "jsonhelper")
 
@@ -92,22 +97,29 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
 
     time_built = time.time()
 
+    # short interval for progress bar for interactive use
+    # longer interval otherwise to avoid blowing up logs
+    if sys.stdout.isatty():
+        interval = 1
+    else:
+        interval = 5*60
 
-    if lumisums:
-        print("begin lumi loop")
-        ROOT.ROOT.RDF.RunGraphs(lumisums.values())
+    if lumidfs:
+        # need to flush before the event loop to keep output consistently ordered
+        print("begin lumi loop", flush = True)
+        # call every entry for lumi tree otherwise not enough statistics for
+        # printouts every 1s usually
+        ROOT.narf.RunGraphsWithProgressBar(lumidfs, 1, interval)
         print("end lumi loop")
     time_done_lumi = time.time()
 
     for name, val in lumisums.items():
         print(name, val.GetValue())
 
-    print("begin event loop")
-    ROOT.ROOT.RDF.RunGraphs(evtcounts)
+    print("begin event loop", flush = True)
+    ROOT.narf.RunGraphsWithProgressBar(dfs, 1000, interval)
     print("done event loop")
     time_done_event = time.time()
-
-    #print(results)
 
     resultdict = {}
 
