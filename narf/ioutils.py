@@ -34,7 +34,7 @@ class H5PickleProxy:
 
         return self.obj
 
-    def release():
+    def release(self):
         self.obj = None
 
 class H5Buffer():
