@@ -206,11 +206,11 @@ class FitDebugData:
             syst_hist = hist.Hist(*axes, self.axis_procs, self.axis_systs, self.axis_downup, name=f"{channel}_syst")
 
             logkdown = logkavg - logkhalfdiff
-            syst_hist[{"DownUp" : "Down"}] = np.exp(-logkdown)
+            syst_hist[{"DownUp" : "Down"}] = np.exp(-logkdown)*nominal_hist.values()[..., None]
             del logkdown
 
             logkup = logkavg + logkhalfdiff
-            syst_hist[{"DownUp" : "Up"}] = np.exp(logkup)
+            syst_hist[{"DownUp" : "Up"}] = np.exp(logkup)*nominal_hist.values()[..., None]
             del logkup
 
             syst_active_hist = hist.Hist(self.axis_procs, self.axis_systs, name=f"{channel}_syst_active", storage = hist.storage.Int64())
