@@ -192,9 +192,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     if tensor_weight:
         # weight is a tensor type, using tensor-storage directly
-        tensor_type = coltypes[-1]
-        # convert from string to cppyy type
-        tensor_type = ROOT.narf.type_identity[tensor_type].type
+        tensor_type = traits.tensor_type
 
         if isinstance(storage, bh.storage.Double):
             cppstoragetype = ROOT.narf.tensor_accumulator[tensor_type.Scalar, tensor_type.Dimensions]
