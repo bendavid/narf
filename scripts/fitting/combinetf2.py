@@ -119,7 +119,8 @@ if args.saveHists:
     })
 
     ibin = 0
-    for channel, axes in fitter.indata.channel_axes.items():
+    for channel, info in fitter.indata.channel_info.items():
+        axes = info["axes"]
 
         shape = [len(a) for a in axes]
         stop = ibin+np.product(shape)

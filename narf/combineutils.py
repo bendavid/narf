@@ -126,13 +126,13 @@ class FitInputData:
             if "meta" in f.keys():
                 from narf.ioutils import pickle_load_h5py
                 self.metadata = pickle_load_h5py(f["meta"])
-                self.channel_axes = self.metadata["channel_axes"]
+                self.channel_info = self.metadata["channel_info"]
             else:
-                self.channel_axes = {
-                    "ch0": [hist.axis.Integer(0, self.nbins, underflow=False, overflow=False, name="obs")]
+                self.channel_info = {
+                    "ch0":{"axes": [hist.axis.Integer(0, self.nbins, underflow=False, overflow=False, name="obs")]}
                 }
                 if self.nbinsmasked > 0:
-                    self.channel_axes["ch1_masked"] = [hist.axis.Integer(0, self.nbinsmasked, underflow=False, overflow=False, name="masked")]
+                    self.channel_info["ch1_masked"] = {"axes": [hist.axis.Integer(0, self.nbinsmasked, underflow=False, overflow=False, name="masked")]}
 
             self.axis_procs = hist.axis.StrCategory(self.procs, name="processes")                
 
@@ -184,7 +184,8 @@ class FitDebugData:
         self.syst_active_hists = {}
 
         ibin = 0
-        for channel, axes in self.indata.channel_axes.items():
+        for channel, info in self.indata.channel_info.items():
+            axes = info["axes"]
             shape = [len(a) for a in axes]
             stop = ibin+np.product(shape)
 
@@ -225,7 +226,7 @@ class FitDebugData:
 
     def nonzeroSysts(self, channels = None, procs = None):
         if channels is None:
-            channels = self.indata.channel_axes.keys()
+            channels = self.indata.channel_info.keys()
 
         if procs is None:
             procs = list(self.axis_procs)
@@ -256,7 +257,7 @@ class FitDebugData:
 
         channels_out = []
 
-        for channel in self.indata.channel_axes:
+        for channel in self.indata.channel_info:
             syst_active_hist = self.syst_active_hists[channel]
             syst_active_hist = syst_active_hist[{"processes" : procs, "systs" : systs}]
             if np.count_nonzero(syst_active_hist.values()) > 0:
@@ -266,7 +267,7 @@ class FitDebugData:
 
     def procsForNonzeroSysts(self, channels = None, systs = None):
         if channels is None:
-            channels = self.indata.channel_axes.keys()
+            channels = self.indata.channel_info.keys()
 
         if systs is None:
             systs = list(self.axis_systs)
