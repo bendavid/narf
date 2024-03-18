@@ -164,12 +164,11 @@ if args.saveHists:
 
 # pass meta data into output file
 meta = {
-    "meta_info_combinetf2" : narf.ioutils.make_meta_info_dict(args=args),
+    "meta_info" : narf.ioutils.make_meta_info_dict(args=args), 
+    "meta_info_input": fitter.indata.metadata,
     "signals": fitter.indata.signals,
     "procs": fitter.indata.procs,
-    **fitter.indata.metadata
 }
-results["meta"] = narf.ioutils.H5PickleProxy(meta)
 
 outfolder = os.path.dirname(args.output)
 if not os.path.exists(outfolder):
@@ -178,3 +177,4 @@ if not os.path.exists(outfolder):
     
 with h5py.File(args.output, "w") as fout:
     narf.ioutils.pickle_dump_h5py("results", results, fout)
+    narf.ioutils.pickle_dump_h5py("meta", meta, fout)
