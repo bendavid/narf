@@ -119,7 +119,8 @@ if args.saveHists:
     })
 
     ibin = 0
-    for channel, axes in fitter.indata.channel_axes.items():
+    for channel, info in fitter.indata.channel_info.items():
+        axes = info["axes"]
 
         shape = [len(a) for a in axes]
         stop = ibin+np.product(shape)
@@ -163,12 +164,11 @@ if args.saveHists:
 
 # pass meta data into output file
 meta = {
-    "meta_info_combinetf2" : narf.ioutils.make_meta_info_dict(args=args),
+    "meta_info" : narf.ioutils.make_meta_info_dict(args=args), 
+    "meta_info_input": fitter.indata.metadata,
     "signals": fitter.indata.signals,
     "procs": fitter.indata.procs,
-    **fitter.indata.metadata
 }
-results["meta"] = narf.ioutils.H5PickleProxy(meta)
 
 outfolder = os.path.dirname(args.output)
 if not os.path.exists(outfolder):
@@ -177,3 +177,4 @@ if not os.path.exists(outfolder):
     
 with h5py.File(args.output, "w") as fout:
     narf.ioutils.pickle_dump_h5py("results", results, fout)
+    narf.ioutils.pickle_dump_h5py("meta", meta, fout)
