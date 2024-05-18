@@ -95,7 +95,8 @@ if args.externalPostfit is not None:
 chi2_postfit = fitter.chi2(cov)
 
 results = {
-    "ndf": fitter.indata.nbins - fitter.indata.nnoigroups - fitter.indata.nsignals,
+    "ndf_prefit": fitter.indata.nbins,
+    "ndf_postfit": fitter.indata.nbins - fitter.indata.nsystnoconstraint - fitter.indata.nsignals,
     "chi2_prefit": chi2_prefit,
     "chi2_postfit": chi2_postfit
 }
