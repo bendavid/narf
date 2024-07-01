@@ -1,15 +1,17 @@
 import csv
 import json
+from datetime import datetime
 import ROOT
 import pathlib
 import narf.clingutils
 
 narf.clingutils.Declare('#include "lumitools.h"')
 
-def make_lumihelper(filename):
+
+def make_brilcalc_helper(filename, idx, action):
     runs = []
     lumis = []
-    lumivals = []
+    vals = []
 
     with open(filename) as lumicsv:
         reader = csv.reader(lumicsv)
@@ -19,22 +21,31 @@ def make_lumihelper(filename):
 
             run, _ = row[0].split(":")
             lumi, _ = row[1].split(":")
-            lumival = row[6]
+            val = row[idx]
             
             run = int(run)
             lumi = int(lumi)
-            lumival = float(lumival)
+            val = action(val)
             
             runs.append(run)
             lumis.append(lumi)
-            lumivals.append(lumival)            
+            vals.append(val)            
         
-    lumihelper = ROOT.LumiHelper(runs, lumis, lumivals)
-    return lumihelper
+    brilcalc_helper = ROOT.BrilcalcHelper(runs, lumis, vals)
+    return brilcalc_helper
+
+
+def make_lumihelper(filename):
+    return make_brilcalc_helper(filename, idx=6, action=float)
+
+
+def make_timehelper(filename):
+    action = lambda x: datetime.strptime(x, "%m/%d/%y %H:%M:%S").timestamp()
+    return make_brilcalc_helper(filename, idx=2, action=action)
+
 
 def make_jsonhelper(filename):
-    
-    
+
     with open(filename) as jsonfile:
         jsondata = json.load(jsonfile)
     
