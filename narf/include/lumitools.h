@@ -9,21 +9,21 @@ struct RunLumiHash {
   }
 };
 
-class LumiHelper {
+class BrilcalcHelper {
  
 public:
-  using lumimap_t = std::unordered_map<std::pair<unsigned int, unsigned int>, double, RunLumiHash>;
+  using valuemap_t = std::unordered_map<std::pair<unsigned int, unsigned int>, double, RunLumiHash>;
   
-  LumiHelper(const std::vector<unsigned int> &runs, const std::vector<unsigned int> &lumis, const std::vector<double> &lumivals) :
-  lumimap_(std::make_shared<lumimap_t>()) {
+  BrilcalcHelper(const std::vector<unsigned int> &runs, const std::vector<unsigned int> &lumis, const std::vector<double> &lumivals) :
+  valuemap_(std::make_shared<valuemap_t>()) {
     for (unsigned int i = 0; i < lumivals.size(); ++i) {
-      lumimap_->insert(std::make_pair(std::make_pair(runs[i], lumis[i]), lumivals[i]));
+      valuemap_->insert(std::make_pair(std::make_pair(runs[i], lumis[i]), lumivals[i]));
     }
   }
     
   double operator () (unsigned int run, unsigned int lumi) const {
-    const auto it = lumimap_->find(std::make_pair(run, lumi));
-    if (it != lumimap_->end()) {
+    const auto it = valuemap_->find(std::make_pair(run, lumi));
+    if (it != valuemap_->end()) {
       return it->second;
     }
     throw std::runtime_error("lumi not found");
@@ -33,7 +33,7 @@ public:
   
   
 private:
-  std::shared_ptr<lumimap_t> lumimap_;
+  std::shared_ptr<valuemap_t> valuemap_;
   
 };
 
