@@ -9,6 +9,7 @@
 #include <iostream>
 #include <eigen3/Eigen/Dense>
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
+#include "oneapi/tbb.h"
 
 namespace narf {
   using namespace boost::histogram;
@@ -136,6 +137,133 @@ namespace narf {
     return true;
   }
 
+  template <class A>
+  std::size_t unlinearize_index_impl(const std::size_t out, const std::size_t stride, const A& ax,
+                              axis::index_type &idx) noexcept {
+    const auto opt = axis::traits::get_options<A>();
+    const axis::index_type begin = opt & axis::option::underflow ? -1 : 0;
+    const axis::index_type end = opt & axis::option::overflow ? ax.size() + 1 : ax.size();
+    const axis::index_type extent = end - begin;
+    //TODO refactor this to avoid two separate division/modulus operations here
+    idx = begin + (out/stride)%extent;
+    return extent;
+  }
+
+  template<typename HIST>
+  typename HIST::multi_index_type unlinearize_index(const HIST &hist, std::size_t idx) {
+    auto indices = HIST::multi_index_type::create(hist.rank());
+    using std::begin;
+    auto i = begin(indices);
+    auto stride = static_cast<std::size_t>(1);
+    hist.for_each_axis([&](const auto& a) { stride *= unlinearize_index_impl(idx, stride, a, *i++); });
+    return indices;
+  }
+
+  template<typename HIST>
+  class indexed_range_linear {
+  public:
+    using indices_t = typename HIST::multi_index_type;
+    using value_iterator_t = std::conditional_t<std::is_const<HIST>::value,
+                                            typename HIST::const_iterator,
+                                            typename HIST::iterator>;
+    using interator_base_t = std::iterator<std::forward_iterator_tag,
+                                          typename value_iterator_t::value_type,
+                                          typename value_iterator_t::difference_type,
+                                          typename value_iterator_t::pointer,
+                                          typename value_iterator_t::reference>;
+
+    class iterator : public interator_base_t{
+    public:
+
+
+      iterator(HIST &hist, std::size_t idx) : indices_(unlinearize_index(hist, idx)),
+        indices_begin_(HIST::multi_index_type::create(hist.rank())),
+        indices_end_(HIST::multi_index_type::create(hist.rank())) {
+
+        auto itb = indices_begin_.begin();
+        auto ite = indices_end_.begin();
+        hist.for_each_axis([&itb, &ite](const auto &ax) {
+          const auto opt = axis::traits::get_options<std::remove_reference_t<decltype(ax)>>();
+          *(itb++) = opt & axis::option::underflow ? -1 : 0;
+          *(ite++) = opt & axis::option::overflow ? ax.size() + 1 : ax.size();
+        });
+
+        if (idx == hist.size()) {
+          iter_ = hist.end();
+        }
+        else {
+          iter_ = hist.begin() + idx;
+          // explicitly check that the indices match
+          if (&hist.at(indices_) != &*iter_) {
+            throw std::runtime_error("inconsistency in construction of indexed_range_linear iterator.");
+          }
+        }
+
+      }
+
+      typename interator_base_t::reference operator*() const { return *iter_; }
+
+      iterator& operator++() {
+
+        auto it = indices_.begin();
+        auto itb = indices_begin_.begin();
+        auto ite = indices_end_.begin();
+
+        ++(*it);
+        while (it != indices_.end() && *it == *(ite++)) {
+          *(it++) = *(itb++);
+          if (it == indices_.end()) {
+            //this means we're moving to one-past-the-end
+            break;
+          }
+          ++*(it);
+        }
+
+        ++iter_;
+
+        return *this;
+      }
+
+      bool operator==(const iterator& x) const noexcept { return iter_ == x.iter_; }
+      bool operator!=(const iterator& x) const noexcept { return !operator==(x); }
+
+      // make iterator ready for C++17 sentinels
+      bool operator==(const value_iterator_t& x) const noexcept { return iter_ == x; }
+      bool operator!=(const value_iterator_t& x) const noexcept { return !operator==(x); }
+
+      const indices_t &indices() const noexcept { return indices_; }
+      const value_iterator_t &iter() const noexcept { return iter_; }
+
+    private:
+      indices_t indices_;
+      indices_t indices_begin_;
+      indices_t indices_end_;
+      value_iterator_t iter_;
+    };
+
+    indexed_range_linear(HIST &hist, const std::size_t ibegin, const std::size_t iend) :
+      begin_(hist, ibegin), end_(hist, iend) {}
+
+    iterator begin() noexcept { return begin_; }
+    iterator end() noexcept { return end_; }
+
+  private:
+    iterator begin_;
+    iterator end_;
+  };
+
+  template<typename HIST>
+  auto indexed_linear(HIST &&hist) {
+    using range_t = indexed_range_linear<std::remove_reference_t<HIST>>;
+    return range_t(hist, 0, hist.size());
+  }
+
+  template<typename HIST>
+  auto indexed_linear(HIST &&hist, const std::size_t ibegin, const std::size_t iend) {
+    using range_t = indexed_range_linear<std::remove_reference_t<HIST>>;
+    return range_t(hist, ibegin, iend);
+  }
+
   template<typename T, std::size_t NDims, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
   class array_interface_view {
 
@@ -157,36 +285,72 @@ namespace narf {
     std::ptrdiff_t size() const { return std::accumulate(sizes_.begin(), sizes_.end(), 1, std::multiplies<std::ptrdiff_t>()); }
 
     template <typename HIST>
-    void from_boost(HIST &hist) {
-      //TODO multithreading for this
+    void from_boost(const HIST &hist) {
+
+      // to avoid explicitly checking if bins are in range, require that all axes
+      // in the view are at least as large as for the C++ histogram
+      // note this doesn't need to be checked for the tensor axes
+      // since they have no underflow or overflow in the C++ histogram and are safe by
+      //construction.
+
+      // TODO make this check more explicit in terms of overflow/underflow
+
+
+      for (std::size_t iax = 0; iax < hist.rank(); ++iax) {
+        if (boost::histogram::axis::traits::extent(hist.axis(iax)) > sizes_[iax]) {
+            throw std::runtime_error("Incompatible underflow/overflow for histogram conversion");
+        }
+      }
 
       constexpr std::size_t rank = NDims;
 
       using acc_t = typename HIST::storage_type::value_type;
       using acc_trait = narf::acc_traits<acc_t>;
 
-
+      auto fill_hist = [&hist](auto &fill_bin) {
+        if (ROOT::IsImplicitMTEnabled()) {
+          auto rarena = ROOT::Internal::GetGlobalTaskArena(ROOT::GetThreadPoolSize());
+          //FIXME this is ugly but this really does inherit from tbb::task_arena even though it's hidden from the compiler
+          tbb::task_arena &arena = *reinterpret_cast<tbb::task_arena*>(&rarena->Access());
+          using brange_t = oneapi::tbb::blocked_range<std::size_t>;
+          brange_t brange(0, hist.size());
+          auto pfill = [&fill_bin, &hist](const brange_t& r) {
+            auto range = indexed_linear(hist, r.begin(), r.end());
+            for (auto it = range.begin(); it != range.end(); ++it) {
+              fill_bin(it);
+            }
+          };
+          arena.execute([&] {
+              oneapi::tbb::this_task_arena::isolate([&] {
+                oneapi::tbb::parallel_for(brange, pfill);
+              });
+          });
+        }
+        else {
+          auto range = indexed_linear(hist);
+          for (auto it = range.begin(); it != range.end(); ++it) {
+            fill_bin(it);
+          }
+        }
+      };
 
       if constexpr (acc_trait::is_tensor) {
         const auto fillrank = hist.rank();
 
-        for (auto&& x: indexed(hist, coverage::all)) {
+        auto fill_bin = [this, &fillrank](auto const &it) {
+
           std::array<std::ptrdiff_t, rank> idxs;
+          auto itidx = it.indices().begin();
           for (std::size_t idim = 0; idim < fillrank; ++idim) {
-            idxs[idim] = x.index(idim) + flow_offsets_[idim];
+            idxs[idim] = *(itidx++) + flow_offsets_[idim];
           }
 
-          auto const &tensor_acc_val = *x;
+          auto const &tensor_acc_val = *it;
 
           for (auto it = tensor_acc_val.indices_begin(); it != tensor_acc_val.indices_end(); ++it) {
             const auto tensor_indices = it.indices;
             for (std::size_t idim = fillrank; idim < rank; ++idim) {
               idxs[idim] = tensor_indices[idim - fillrank] + flow_offsets_[idim];
-            }
-            
-            // overflow or underflow bin in the histogram with no corresponding bin in the view
-            if (!in_range(idxs)) {
-              continue;
             }
 
             auto const &acc_val = std::apply(tensor_acc_val.data(), tensor_indices);
@@ -196,27 +360,28 @@ namespace narf {
             T acc_val_tmp = acc_val;
             std::memcpy(elem, &acc_val_tmp, sizeof(T));
           }
-        }
+        };
+
+        fill_hist(fill_bin);
+
       }
       else {
-        for (auto&& x: indexed(hist, coverage::all)) {
+        auto fill_bin = [this](auto const &it) {
           std::array<std::ptrdiff_t, rank> idxs;
+          auto itidx = it.indices().begin();
           for (std::size_t idim = 0; idim < rank; ++idim) {
-            idxs[idim] = x.index(idim) + flow_offsets_[idim];
-          }
-          
-          // overflow or underflow bin in the histogram with no corresponding bin in the view
-          if (!in_range(idxs)) {
-            continue;
+            idxs[idim] = *(itidx++) + flow_offsets_[idim];
           }
 
-          auto const &acc_val = *x;
+          auto const &acc_val = *it;
 
           std::byte *elem = element_ptr(idxs);
 
           const T acc_val_tmp = acc_val;
           std::memcpy(elem, &acc_val_tmp, sizeof(T));
-        }
+        };
+
+        fill_hist(fill_bin);
       }
     }
 
