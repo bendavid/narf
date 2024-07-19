@@ -337,7 +337,7 @@ class Fitter:
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
 
-        nexpfullcentral = self.expected_events()
+        nexpfullcentral = self.expected_events_noBBB()
         self.nexpnom = tf.Variable(nexpfullcentral, trainable=False, name="nexpnom")
 
     def prefit_covariance(self):
@@ -364,6 +364,14 @@ class Fitter:
         jac = t.jacobian(val, self.x)
 
         return val, jac
+
+    def bayesassign(self):
+        if self.npoi > 0:
+            raise NotImplementedError("Assignment for Bayesian toys is not currently supported in the presence of explicit POIs")
+        self.x.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
+
+    def frequentistassign(self):
+        self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
     def _experr(self, fun_exp, invhesschol):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
@@ -442,7 +450,7 @@ class Fitter:
         return expected, err
 
 
-    def _compute_yields(self):
+    def _compute_yields_noBBB(self):
         xpoi = self.x[:self.npoi]
         theta = self.x[self.npoi:]
 
@@ -506,17 +514,44 @@ class Fitter:
 
         return nexpfullcentral, normfullcentral
 
+        # nexpfull = nexpfullcentral
+        # normfull = normfullcentral
+
+    def _compute_yields(self):
+        nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
+
+        nexpfull = nexpfullcentral
+        normfull = normfullcentral
+
+        beta = None
+        if self.binByBinStat:
+            beta = (self.nobs + self.indata.kstat)/(nexpfullcentral+self.indata.kstat)
+            # tf.print("beta", beta)
+            # print("beta.shape", beta.shape)
+            # print("nexpfullcentral.shape", nexpfullcentral.shape)
+            # betadiff = tf.reduce_max(tf.abs(beta-1.))
+            # tf.print("betadiff", betadiff)
+            nexpfull = beta*nexpfullcentral
+            normfull = beta[..., None]*normfullcentral
+
+        return nexpfull, normfull, beta
+
     def _compute_yields_inclusive(self):
-        nexpfullcentral, normfullcentral = self._compute_yields()
+        nexpfullcentral, normfullcentral, beta = self._compute_yields()
         return nexpfullcentral
 
     def _compute_yields_per_process(self):
-        nexpfullcentral, normfullcentral = self._compute_yields()
+        nexpfullcentral, normfullcentral, beta = self._compute_yields()
         return normfullcentral
 
     @tf.function
     def expected_events(self):
         return self._compute_yields_inclusive()
+
+    @tf.function
+    def expected_events_noBBB(self):
+        nexpfull, _ = self._compute_yields_noBBB()
+        return nexpfull
 
     @tf.function
     def expected_events_per_process(self):
@@ -529,7 +564,7 @@ class Fitter:
     def _compute_nll(self):
         theta = self.x[self.npoi:]
 
-        nexpfullcentral, normfullcentral = self._compute_yields()
+        nexpfullcentral, normfullcentral, beta = self._compute_yields()
 
         nexp = nexpfullcentral
 
@@ -554,6 +589,16 @@ class Fitter:
 
         l = ln + lc
         lfull = lnfull + lc
+
+        if self.binByBinStat:
+            beta0 = tf.ones_like(beta)
+            lbetavfull = -self.indata.kstat*tf.math.log(beta/beta0) + self.indata.kstat*beta/beta0
+
+            lbetav = lbetavfull - self.indata.kstat
+            lbeta = tf.reduce_sum(lbetav)
+
+            l = l + lbeta
+            lfull = lfull + lbeta
 
         return l, lfull
 
@@ -608,6 +653,12 @@ class Fitter:
             val, grad, hessp = self.loss_val_grad_hessp(p)
             print("scipy_hessp", val)
             return hessp.numpy()
+
+        def scipy_hess(xval):
+            self.x.assign(xval)
+            val, grad, hess = self.loss_val_grad_hess()
+            print("scipy_hess", val)
+            return hess.numpy()
 
 
         xval = self.x.numpy()

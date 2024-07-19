@@ -31,7 +31,7 @@ indata = narf.combineutils.FitInputData(args.filename, args.pseudoData)
 fitter = narf.combineutils.Fitter(indata, args)
 
 if args.toys == -1:
-    fitter.nobs.assign(fitter._compute_yields_inclusive())
+    fitter.nobs.assign(fitter.expected_events_noBBB())
 
 if args.saveHists:
 
