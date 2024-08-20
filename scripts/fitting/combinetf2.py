@@ -47,7 +47,7 @@ if args.saveHists:
 
 chi2_prefit = fitter.chi2(fitter.prefit_covariance())
 
-if args.toys >= 0:
+if args.toys >= 0 and args.externalPostfit is None:
     fitter.minimize()
 
 val, grad, hess = fitter.loss_val_grad_hess()
