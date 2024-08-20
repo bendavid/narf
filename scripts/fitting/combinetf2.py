@@ -40,10 +40,15 @@ if args.saveHists:
     # for a diagonal matrix cholesky decomposition equivalent is equal to the element-wise sqrt
     invhessianprefitchol = tf.sqrt(invhessianprefit)
 
-    exp_pre_per_process = fitter.expected_events_per_process()
 
     if args.computeHistErrors:
         exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance(invhessianprefitchol)
+        exp_pre_per_process, exp_pre_per_process_var = fitter.expected_events_per_process_with_variance(invhessianprefitchol)
+    else:
+        exp_pre_inclusive = fitter.expected_events_inclusive()
+        exp_pre_per_process = fitter.expected_events_per_process()
+
+
 
 chi2_prefit = fitter.chi2(fitter.prefit_covariance())
 
@@ -105,10 +110,12 @@ if args.saveHists:
 
     covchol_ext = tf.linalg.cholesky(cov)
 
-    exp_post_per_process = fitter.expected_events_per_process()
-
     if args.computeHistErrors:
         exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(covchol_ext)
+        exp_post_per_process, exp_post_per_process_var = fitter.expected_events_per_process_with_variance(covchol_ext)
+    else:
+        exp_post_inclusive = fitter.expected_events_inclusive()
+        exp_post_per_process = fitter.expected_events_per_process()
 
     results.update({
         "hist_data_obs":{},
@@ -141,12 +148,18 @@ if args.saveHists:
 
         hist_prefit = hist.Hist(*axes, fitter.indata.axis_procs, storage=hist.storage.Weight(), name = "prefit", label = "prefit expected number of events")
         hist_prefit.values()[...] = memoryview(tf.reshape(exp_pre_per_process[ibin:stop,:], shape_proc))
-        hist_prefit.variances()[...] = 0.
+        if args.computeHistErrors:
+            hist_prefit.variances()[...] = memoryview(tf.reshape(exp_pre_per_process_var[ibin:stop], shape_proc))
+        else:
+            hist_prefit.variances()[...] = 0.
         results["hist_prefit"][channel] = narf.ioutils.H5PickleProxy(hist_prefit)
 
         hist_postfit = hist.Hist(*axes, fitter.indata.axis_procs, storage=hist.storage.Weight(), name = "postfit", label = "postfit expected number of events")
         hist_postfit.values()[...] = memoryview(tf.reshape(exp_post_per_process[ibin:stop,:], shape_proc))
-        hist_postfit.variances()[...] = 0.
+        if args.computeHistErrors:
+            hist_postfit.variances()[...] = memoryview(tf.reshape(exp_post_per_process_var[ibin:stop], shape_proc))
+        else:
+            hist_postfit.variances()[...] = 0.
         results["hist_postfit"][channel] = narf.ioutils.H5PickleProxy(hist_postfit)
 
         if args.computeHistErrors:

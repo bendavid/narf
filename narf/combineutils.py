@@ -373,7 +373,7 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
-    def _experr(self, fun_exp, invhesschol):
+    def _experr(self, fun_exp, invhesschol, skipBinByBinStat = False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
 
         # since the full covariance matrix with respect to the bin counts is given by J^T R^T R J, then summing RJ element-wise squared over the parameter axis gives the diagonal elements
@@ -395,7 +395,7 @@ class Fitter:
         RJ = t1.jacobian(RJu, u)
         sRJ2 = tf.reduce_sum(RJ**2, axis=0)
         sRJ2 = tf.reshape(sRJ2, expected.shape)
-        if self.binByBinStat:
+        if self.binByBinStat and not skipBinByBinStat:
             # add MC stat uncertainty on variance
             sumw2 = tf.square(expected)/self.indata.kstat
             sRJ2 = sRJ2 + sumw2
@@ -560,6 +560,10 @@ class Fitter:
     @tf.function
     def expected_events_inclusive_with_variance(self, invhesschol):
         return self._experr(self._compute_yields_inclusive, invhesschol)
+
+    @tf.function
+    def expected_events_per_process_with_variance(self, invhesschol):
+        return self._experr(self._compute_yields_per_process, invhesschol, skipBinByBinStat=True)
 
     def _compute_nll(self):
         theta = self.x[self.npoi:]
