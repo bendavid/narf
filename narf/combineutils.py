@@ -544,26 +544,37 @@ class Fitter:
         nexpfullcentral, normfullcentral, beta = self._compute_yields()
         return normfullcentral
 
+    def _compute_yields_inclusive_noBBB(self):
+        nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
+        return nexpfullcentral
+
+    def _compute_yields_per_process_noBBB(self):
+        nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
+        return normfullcentral
+
     @tf.function
     def expected_events(self):
         return self._compute_yields_inclusive()
 
     @tf.function
     def expected_events_noBBB(self):
-        nexpfull, _ = self._compute_yields_noBBB()
-        return nexpfull
+        return self._compute_yields_inclusive_noBBB()
 
     @tf.function
     def expected_events_per_process(self):
         return self._compute_yields_per_process()
 
     @tf.function
-    def expected_events_inclusive_with_variance(self, invhesschol):
-        return self._experr(self._compute_yields_inclusive, invhesschol)
+    def expected_events_per_process_noBBB(self):
+        return self._compute_yields_per_process_noBBB()
 
     @tf.function
-    def expected_events_per_process_with_variance(self, invhesschol):
-        return self._experr(self._compute_yields_per_process, invhesschol, skipBinByBinStat=True)
+    def expected_events_inclusive_with_variance_noBBB(self, invhesschol):
+        return self._experr(self._compute_yields_inclusive_noBBB, invhesschol)
+
+    @tf.function
+    def expected_events_per_process_with_variance_noBBB(self, invhesschol):
+        return self._experr(self._compute_yields_per_process_noBBB, invhesschol, skipBinByBinStat=True)
 
     def _compute_nll(self):
         theta = self.x[self.npoi:]

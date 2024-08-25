@@ -43,8 +43,8 @@ if args.saveHists:
 
 
     if args.computeHistErrors:
-        exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance(invhessianprefitchol)
-        exp_pre_per_process, exp_pre_per_process_var = fitter.expected_events_per_process_with_variance(invhessianprefitchol)
+        exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance_noBBB(invhessianprefitchol)
+        exp_pre_per_process, exp_pre_per_process_var = fitter.expected_events_per_process_with_variance_noBBB(invhessianprefitchol)
     else:
         exp_pre_inclusive = fitter.expected_events_inclusive()
         exp_pre_per_process = fitter.expected_events_per_process()
@@ -112,8 +112,8 @@ if args.saveHists:
     covchol_ext = tf.linalg.cholesky(cov)
 
     if args.computeHistErrors:
-        exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(covchol_ext)
-        exp_post_per_process, exp_post_per_process_var = fitter.expected_events_per_process_with_variance(covchol_ext)
+        exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance_noBBB(covchol_ext)
+        exp_post_per_process, exp_post_per_process_var = fitter.expected_events_per_process_with_variance_noBBB(covchol_ext)
     else:
         exp_post_inclusive = fitter.expected_events()
         exp_post_per_process = fitter.expected_events_per_process()
