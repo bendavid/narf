@@ -21,6 +21,7 @@ parser.add_argument("--allowNegativePOI", default=False, action='store_true', he
 parser.add_argument("--POIDefault", default=1., type=float, help="mode for POI's")
 parser.add_argument("--saveHists", default=False, action='store_true', help="save prefit and postfit histograms")
 parser.add_argument("--computeHistErrors", default=False, action='store_true', help="propagate uncertainties to prefit and postfit histograms")
+parser.add_argument("--computeNOIVariations", default=False, action='store_true', help="save postfit histograms with each noi varied up to down")
 parser.add_argument("--binByBinStat", default=False, action='store_true', help="add bin-by-bin statistical uncertainties on templates (adding sumW2 on variance)")
 parser.add_argument("--externalPostfit", default=None, help="load posfit nuisance parameters and covariance from result of an external fit")
 parser.add_argument("--pseudoData", default=None, type=str, help="run fit on pseudo data with the given name")
@@ -114,8 +115,26 @@ if args.saveHists:
         exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(covchol_ext)
         exp_post_per_process, exp_post_per_process_var = fitter.expected_events_per_process_with_variance(covchol_ext)
     else:
-        exp_post_inclusive = fitter.expected_events_inclusive()
+        exp_post_inclusive = fitter.expected_events()
         exp_post_per_process = fitter.expected_events_per_process()
+    
+    if args.computeNOIVariations:
+        exp_post_inclusive_noi_up = {}
+        exp_post_inclusive_noi_down = {}
+        for noi_key, noi_idx in zip(indata.noigroups, indata.noigroupidxs):
+            # get up/down variation for each noi
+            central = fitter.x[noi_idx]
+            variation = cov[noi_idx,noi_idx]**0.5
+            noi_name = fitter.parms[noi_idx].decode('utf-8')
+
+            fitter.x[noi_idx].assign(central + variation)
+            exp_post_inclusive_noi_up[noi_name] = fitter.expected_events()
+
+            fitter.x[noi_idx].assign(central - variation)
+            exp_post_inclusive_noi_down[noi_name] = fitter.expected_events()
+
+            # set back to central value
+            fitter.x[noi_idx].assign(central)
 
     results.update({
         "hist_data_obs":{},
@@ -124,6 +143,7 @@ if args.saveHists:
         "hist_postfit":{},
         "hist_prefit_inclusive":{},
         "hist_postfit_inclusive":{},
+        "hist_postfit_inclusive_variations_nois":{},
     })
 
     ibin = 0
@@ -172,6 +192,24 @@ if args.saveHists:
             hist_postfit_inclusive.values()[...] = memoryview(tf.reshape(exp_post_inclusive[ibin:stop], shape))
             hist_postfit_inclusive.variances()[...] = memoryview(tf.reshape(exp_post_inclusive_var[ibin:stop], shape))
             results["hist_postfit_inclusive"][channel] = narf.ioutils.H5PickleProxy(hist_postfit_inclusive)
+
+        if args.computeNOIVariations:
+            # save up/down variation for each noi
+            hNOI = hist.Hist(
+                *axes, 
+                hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar"), 
+                hist.axis.StrCategory(exp_post_inclusive_noi_up.keys(), name="nois"),
+                storage = hist.storage.Double(), 
+                name = f"postfit_inclusive_variations_nois", 
+                label = f"postfit expected number with varied NOIs of events for all processes combined",
+                )
+
+            for noi in exp_post_inclusive_noi_up.keys():
+                noi_idx = hNOI.axes["nois"].index(noi)
+                hNOI.values()[...,0,noi_idx] = memoryview(tf.reshape(exp_post_inclusive_noi_down[noi][ibin:stop], shape))
+                hNOI.values()[...,1,noi_idx] = memoryview(tf.reshape(exp_post_inclusive_noi_up[noi][ibin:stop], shape))
+
+            results[f"hist_postfit_inclusive_variations_nois"][channel] = narf.ioutils.H5PickleProxy(hNOI)
 
         ibin = stop
 
