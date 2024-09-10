@@ -25,10 +25,11 @@ parser.add_argument("--computeNOIVariations", default=False, action='store_true'
 parser.add_argument("--binByBinStat", default=False, action='store_true', help="add bin-by-bin statistical uncertainties on templates (adding sumW2 on variance)")
 parser.add_argument("--externalPostfit", default=None, help="load posfit nuisance parameters and covariance from result of an external fit")
 parser.add_argument("--pseudoData", default=None, type=str, help="run fit on pseudo data with the given name")
+parser.add_argument("--normalize", default=False, action='store_true', help="Normalize prediction and systematic uncertainties to the overall event yield in data")
 
 args = parser.parse_args()
 
-indata = narf.combineutils.FitInputData(args.filename, args.pseudoData)
+indata = narf.combineutils.FitInputData(args.filename, args.pseudoData, normalize=args.normalize)
 fitter = narf.combineutils.Fitter(indata, args)
 
 if args.toys == -1:
@@ -41,15 +42,12 @@ if args.saveHists:
     # for a diagonal matrix cholesky decomposition equivalent is equal to the element-wise sqrt
     invhessianprefitchol = tf.sqrt(invhessianprefit)
 
-
     if args.computeHistErrors:
         exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance_noBBB(invhessianprefitchol)
         exp_pre_per_process, exp_pre_per_process_var = fitter.expected_events_per_process_with_variance_noBBB(invhessianprefitchol)
     else:
         exp_pre_inclusive = fitter.expected_events_inclusive()
         exp_pre_per_process = fitter.expected_events_per_process()
-
-
 
 chi2_prefit = fitter.chi2(fitter.prefit_covariance())
 
@@ -59,7 +57,6 @@ if args.toys >= 0 and args.externalPostfit is None:
 val, grad, hess = fitter.loss_val_grad_hess()
 
 cov = tf.linalg.inv(hess)
-
 
 if args.externalPostfit is not None:
     # load results from external fit and set postfit value and covariance elements for common parameters

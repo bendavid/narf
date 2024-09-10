@@ -36,7 +36,7 @@ def makesparsetensor(h5group):
     return SimpleSparseTensor(indices,values,dense_shape)
 
 class FitInputData:
-    def __init__(self, filename, pseudodata=None):
+    def __init__(self, filename, pseudodata=None, normalize=False):
         with h5py.File(filename, mode='r') as f:
 
             #load text arrays from file
@@ -165,6 +165,36 @@ class FitInputData:
             else:
                 self.norm = maketensor(hnorm)
                 self.logk = maketensor(hlogk)
+
+            if normalize:
+                # normalize predictoin and each systematic to total event yield in data
+
+                data_sum = tf.reduce_sum(self.data_obs)
+                norm_sum = tf.reduce_sum(self.norm)
+                logdata_sum = tf.math.log(data_sum)[None, None, ...]
+
+                logkavg = self.logk[..., 0, :]
+                logkhalfdiff = self.logk[..., 1, :]
+
+                logkdown = logkavg - logkhalfdiff
+                logkdown_sum = tf.math.log(tf.reduce_sum(tf.exp(-logkdown) * self.norm[..., None], axis=(0,1)))[None, None, ...]
+                logkdown = logkdown + logkdown_sum - logdata_sum
+
+                logkup = logkavg + logkhalfdiff
+                logkup_sum = tf.math.log(tf.reduce_sum(tf.exp(logkup) * self.norm[..., None], axis=(0,1)))[None, None, ...]
+                logkup = logkup - logkup_sum + logdata_sum
+
+                # Compute new logkavg and logkhalfdiff
+                logkavg = 0.5 * (logkup + logkdown)
+                logkhalfdiff = 0.5 * (logkup - logkdown)
+
+                # Stack logkavg and logkhalfdiff to form the new logk_array using tf.stack
+                logk_array = tf.stack([logkavg, logkhalfdiff], axis=-2)
+
+                # Finally, set self.logk to the new computed logk_array
+                self.logk = logk_array
+                self.norm = self.norm * (data_sum / norm_sum)[None, None, ...]
+
 
 class FitDebugData:
     def __init__(self, indata):
