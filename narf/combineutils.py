@@ -166,7 +166,8 @@ class FitInputData:
                 self.norm = maketensor(hnorm)
                 self.logk = maketensor(hlogk)
 
-            if normalize:
+            self.normalize = normalize
+            if self.normalize:
                 # normalize predictoin and each systematic to total event yield in data
 
                 data_sum = tf.reduce_sum(self.data_obs)
@@ -186,7 +187,7 @@ class FitInputData:
 
                 # Compute new logkavg and logkhalfdiff
                 logkavg = 0.5 * (logkup + logkdown)
-                logkhalfdiff = 0.5 * (logkup - logkdown)
+                logkhalfdiff = 0.0 * (logkup - logkdown) # Manually setting it to 0 TODO: FIXME?
 
                 # Stack logkavg and logkhalfdiff to form the new logk_array using tf.stack
                 logk_array = tf.stack([logkavg, logkhalfdiff], axis=-2)
