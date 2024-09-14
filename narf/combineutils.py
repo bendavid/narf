@@ -172,22 +172,22 @@ class FitInputData:
 
                 data_sum = tf.reduce_sum(self.data_obs)
                 norm_sum = tf.reduce_sum(self.norm)
-                logdata_sum = tf.math.log(data_sum)[None, None, ...]
+                lognorm_sum = tf.math.log(norm_sum)[None, None, ...]
 
                 logkavg = self.logk[..., 0, :]
                 logkhalfdiff = self.logk[..., 1, :]
 
                 logkdown = logkavg - logkhalfdiff
-                logkdown_sum = tf.math.log(tf.reduce_sum(tf.exp(-logkdown) * self.norm[..., None], axis=(0,1)))[None, None, ...]
-                logkdown = logkdown + logkdown_sum - logdata_sum
+                logdown_sum = tf.math.log(tf.reduce_sum(tf.exp(-logkdown) * self.norm[..., None], axis=(0,1)))[None, None, ...]
+                logkdown = logkdown + logdown_sum - lognorm_sum
 
                 logkup = logkavg + logkhalfdiff
-                logkup_sum = tf.math.log(tf.reduce_sum(tf.exp(logkup) * self.norm[..., None], axis=(0,1)))[None, None, ...]
-                logkup = logkup - logkup_sum + logdata_sum
+                logup_sum = tf.math.log(tf.reduce_sum(tf.exp(logkup) * self.norm[..., None], axis=(0,1)))[None, None, ...]
+                logkup = logkup - logup_sum + lognorm_sum
 
                 # Compute new logkavg and logkhalfdiff
                 logkavg = 0.5 * (logkup + logkdown)
-                logkhalfdiff = 0.0 * (logkup - logkdown) # Manually setting it to 0 TODO: FIXME?
+                logkhalfdiff = 0.5 * (logkup - logkdown)
 
                 # Stack logkavg and logkhalfdiff to form the new logk_array using tf.stack
                 logk_array = tf.stack([logkavg, logkhalfdiff], axis=-2)
