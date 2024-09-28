@@ -2,6 +2,7 @@
 #define NARF_TFLITEUTILS_H
 
 #include "tensorflow/lite/interpreter.h"
+#include "tensorflow/lite/signature_runner.h"
 #include "tensorflow/lite/kernels/register.h"
 #include "tensorflow/lite/model.h"
 #include "tensorflow/lite/kernels/internal/tensor_ctypes.h"
