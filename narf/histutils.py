@@ -178,7 +178,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
             if tensor_axes is None:
                 tensor_axes = [None]*traits.rank
 
-            for idim, (size, tensor_axis) in enumerate(zip(traits.get_sizes(), tensor_axes)):
+            for idim, (size, tensor_axis) in enumerate(zip(list(traits.get_sizes()), tensor_axes)):
                 if isinstance(tensor_axis, bh.axis.Axis):
                     if tensor_axis.size != size:
                         raise ValueError("Tensor axis must have the same size as the corresponding tensor dimension")
