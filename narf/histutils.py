@@ -206,7 +206,9 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     else:
         cppstoragetype = convert_storage_type(type(storage), force_atomic = force_atomic)
 
-    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+    # FIXME using std.move here would prevent some extra copying but causes mysterious template errors
+    # cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+    cppaxes = [convert_axis(axis) for axis in axes]
 
 
 
