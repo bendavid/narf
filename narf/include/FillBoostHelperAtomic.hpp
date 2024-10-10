@@ -6,7 +6,7 @@
 #include "TROOT.h"
 #include "ROOT/RDF/Utils.hxx"
 #include "ROOT/RDF/ActionHelpers.hxx"
-#include "histutils.h"
+#include "histutils.hpp"
 
 #include <iostream>
 #include <array>

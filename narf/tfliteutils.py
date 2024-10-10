@@ -24,5 +24,5 @@ if not loaded_lite and "libtensorflow_cc.so" not in ROOT.gInterpreter.GetSharedL
     if ret != 0:
         raise RuntimeError("Failed to load libtensorflow_cc.so")
 
-narf.clingutils.Declare('#include "tfliteutils.h"')
+narf.clingutils.Declare('#include "tfliteutils.hpp"')
 

@@ -5,7 +5,7 @@ import ROOT
 import pathlib
 import narf.clingutils
 
-narf.clingutils.Declare('#include "lumitools.h"')
+narf.clingutils.Declare('#include "lumitools.hpp"')
 
 
 def make_brilcalc_helper(filename, idx, action):

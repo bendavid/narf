@@ -2,7 +2,7 @@
 #ifndef NARF_TENSORUTILS_H
 #define NARF_TENSORUTILS_H
 
-#include "traits.h"
+#include "traits.hpp"
 #include <boost/histogram.hpp>
 #include <eigen3/Eigen/Dense>
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
