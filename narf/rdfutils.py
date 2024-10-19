@@ -1,3 +1,3 @@
 import narf.clingutils
 
-narf.clingutils.Declare('#include "rdfutils.h"')
+narf.clingutils.Declare('#include "rdfutils.hpp"')

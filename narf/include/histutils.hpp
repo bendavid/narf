@@ -2,10 +2,11 @@
 #define NARF_HISTUTILS_H
 
 #include <boost/histogram.hpp>
-#include "traits.h"
-#include "atomic_adaptor.h"
-#include "tensorutils.h"
+#include "traits.hpp"
+#include "atomic_adaptor.hpp"
+#include "tensorutils.hpp"
 #include <ROOT/RResultPtr.hxx>
+#include <ROOT/TThreadExecutor.hxx>
 #include <iostream>
 #include <eigen3/Eigen/Dense>
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>

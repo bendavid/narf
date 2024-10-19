@@ -11,8 +11,8 @@ import array
 import cppyy.ll
 import narf.clingutils
 
-narf.clingutils.Declare('#include "histutils.h"')
-narf.clingutils.Declare('#include "FillBoostHelperAtomic.h"')
+narf.clingutils.Declare('#include "histutils.hpp"')
+narf.clingutils.Declare('#include "FillBoostHelperAtomic.hpp"')
 
 narf.clingutils.Declare('#include <eigen3/Eigen/Dense>')
 narf.clingutils.Declare('#include <eigen3/unsupported/Eigen/CXX11/Tensor>')

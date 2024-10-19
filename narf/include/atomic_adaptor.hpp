@@ -4,8 +4,8 @@
 #include <atomic>
 #include <boost/histogram/detail/priority.hpp>
 #include <type_traits>
-#include "traits.h"
-#include "tensorutils.h"
+#include "traits.hpp"
+#include "tensorutils.hpp"
 
 namespace narf {
 
