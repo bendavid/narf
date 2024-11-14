@@ -368,8 +368,11 @@ class Fitter:
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
 
-        nexpfullcentral = self.expected_events_noBBB()
+        nexpfullcentral = self.expected_events(profile=False)
         self.nexpnom = tf.Variable(nexpfullcentral, trainable=False, name="nexpnom")
+
+        # global observables for mc stat uncertainty
+        self.beta0 = tf.ones_like(self.indata.data_obs)
 
     def prefit_covariance(self):
         # free parameters are taken to have zero uncertainty for the purposes of prefit uncertainties
@@ -381,12 +384,6 @@ class Fitter:
 
         invhessianprefit = tf.linalg.diag(tf.concat([var_poi, var_theta], axis = 0))
         return invhessianprefit
-
-    def chi2(self, invhess):
-        chi2 = self._chi2_pedantic(self._compute_yields_inclusive, self.indata.data_obs, invhess)
-        chi2_val = np.array([1])
-        chi2_val[...] = memoryview(chi2)
-        return chi2_val[0]
 
     @tf.function
     def val_jac(self, fun, *args, **kwargs):
@@ -404,8 +401,84 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
-    def _experr(self, fun_exp, invhesschol, skipBinByBinStat = False):
+    def _global_impacts(self, cov):
+        with tf.GradientTape(watch_accessed_variables=False, persistent=True) as t2:
+            # t2.watch(self.x)
+            t2.watch(self.theta0)
+            t2.watch(self.nobs)
+            t2.watch(self.beta0)
+            with tf.GradientTape(watch_accessed_variables=False, persistent=False) as t1:
+                t1.watch(self.x)
+                # t1.watch(self.theta0)
+                # t1.watch(self.nobs)
+                # t1.watch(self.beta0)
+                val = self._compute_loss()
+            grad = t1.gradient(val, self.x, unconnected_gradients="zero")
+        pd2ldxdtheta0 = t2.jacobian(grad, self.theta0, unconnected_gradients="zero")
+        pd2ldxdnobs = t2.jacobian(grad, self.nobs, unconnected_gradients="zero")
+        pd2ldxdbeta0 = t2.jacobian(grad, self.beta0, unconnected_gradients="zero")
+
+        var_theta0 = tf.where(self.indata.constraintweights == 0., tf.zeros_like(self.indata.constraintweights), tf.math.reciprocal(self.indata.constraintweights))
+
+        dtheta0 = tf.math.sqrt(var_theta0)
+        dnobs = tf.math.sqrt(self.nobs)
+        dbeta0 = tf.math.sqrt(tf.math.reciprocal(self.indata.kstat))
+
+        dxdtheta0 = -(cov @ pd2ldxdtheta0)*dtheta0[None, :]
+        dxdnobs = -(cov @ pd2ldxdnobs)*dnobs[None, :]
+        dxdbeta0 = -(cov @ pd2ldxdbeta0)*dbeta0[None, :]
+
+        return dxdtheta0, dxdnobs, dxdbeta0
+
+    def _expvar_profiled(self, fun_exp, cov, compute_cov=False):
+        dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
+
+        with tf.GradientTape(watch_accessed_variables=False, persistent=True) as t:
+            t.watch(self.x)
+            t.watch(self.theta0)
+            t.watch(self.nobs)
+            t.watch(self.beta0)
+
+            expected = fun_exp()
+            expected_flat = tf.reshape(expected, (-1,))
+
+        pdexpdx = t.jacobian(expected_flat, self.x, unconnected_gradients="zero")
+        pdexpdtheta0 = t.jacobian(expected_flat, self.theta0, unconnected_gradients="zero")
+        pdexpdnobs = t.jacobian(expected_flat, self.nobs, unconnected_gradients="zero")
+        pdexpdbeta0 = t.jacobian(expected_flat, self.beta0, unconnected_gradients="zero")
+
+
+        dexpdtheta0 = pdexpdtheta0 + pdexpdx @ dxdtheta0
+        dexpdnobs = pdexpdnobs + pdexpdx @ dxdnobs
+        dexpdbeta0 = pdexpdbeta0 + pdexpdx @ dxdbeta0
+
+        if compute_cov:
+            expcov = dexpdtheta0 @ tf.transpose(dexpdtheta0) + dexpdnobs @ tf.transpose(dexpdnobs) + dexpdbeta0 @ tf.transpose(dexpdbeta0)
+            return expected, expcov
+        else:
+            expvar = tf.reduce_sum(tf.square(dexpdtheta0), axis=-1) + tf.reduce_sum(tf.square(dexpdnobs), axis=-1) + tf.reduce_sum(tf.square(dexpdbeta0), axis=-1)
+
+            expvar = tf.reshape(expvar, expected.shape)
+
+            return expected, expvar
+
+    def _chi2_profiled(self, fun_exp, observed, cov):
+        def fun_residual():
+            return fun_exp() - observed
+
+        res, rescov = self._expvar_profiled(fun_residual, cov, compute_cov=True)
+
+        resv = tf.reshape(res, (-1,1))
+
+        chi_square_value = tf.transpose(resv) @ tf.linalg.solve(rescov, resv)
+
+        return chi_square_value[0,0]
+
+    def _expvar(self, fun_exp, cov, skipBinByBinStat = False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
+
+        #FIXME this doesn't actually work for the positive semi-definite case
+        invhesschol = tf.linalg.cholesky(cov)
 
         # since the full covariance matrix with respect to the bin counts is given by J^T R^T R J, then summing RJ element-wise squared over the parameter axis gives the diagonal elements
 
@@ -432,7 +505,7 @@ class Fitter:
             sRJ2 = sRJ2 + sumw2
         return expected, sRJ2
 
-    def _chi2_pedantic(self, fun_exp, observed, invhess):
+    def _chi2(self, fun_exp, observed, invhess, skipBinByBinStat = False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
         # (extremely cpu and memory-inefficient version for validation purposes only)
 
@@ -447,7 +520,7 @@ class Fitter:
         K = J @invhess @ tf.transpose(J)
         # add data uncertainty on covariance
         K = K + tf.linalg.diag(observed)
-        if self.binByBinStat:
+        if self.binByBinStat and not skipBinByBinStat:
             # add MC stat uncertainty on covariance
             sumw2 = tf.square(expected)/self.indata.kstat
             K = K + tf.linalg.diag(sumw2)
@@ -457,9 +530,9 @@ class Fitter:
         # chi2 = uT*Kinv*u
         chi_square_value = tf.transpose(residual_flat) @ Kinv @ residual_flat
 
-        return chi_square_value
+        return chi_square_value[0,0]
 
-    def _experr_pedantic(self, fun_exp, invhess):
+    def _expvar_pedantic(self, fun_exp, invhess, skipBinByBinStat = False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
         # (extremely cpu and memory-inefficient version for validation purposes only)
 
@@ -473,7 +546,7 @@ class Fitter:
         err = tf.linalg.diag_part(cov)
         err = tf.reshape(err, expected.shape)
 
-        if self.binByBinStat:
+        if self.binByBinStat and not skipBinByBinStat:
             # add MC stat uncertainty on variance
             sumw2 = tf.square(expected)/self.indata.kstat
             err = err + sumw2
@@ -584,28 +657,39 @@ class Fitter:
         return normfullcentral
 
     @tf.function
-    def expected_events(self):
-        return self._compute_yields_inclusive()
+    def expected_events(self, profile=True):
+        if profile:
+            return self._compute_yields_inclusive()
+        else:
+            return self._compute_yields_inclusive_noBBB()
 
     @tf.function
-    def expected_events_noBBB(self):
-        return self._compute_yields_inclusive_noBBB()
+    def expected_events_per_process(self, profile=True):
+        if profile:
+            return self._compute_yields_per_process()
+        else:
+            return self._compute_yields_per_process_noBBB()
 
     @tf.function
-    def expected_events_per_process(self):
-        return self._compute_yields_per_process()
+    def expected_events_inclusive_with_variance(self, cov, profile=True):
+        if profile:
+            return self._expvar_profiled(self._compute_yields_inclusive, cov)
+        else:
+            return self._expvar_pedantic(self._compute_yields_inclusive_noBBB, cov)
 
     @tf.function
-    def expected_events_per_process_noBBB(self):
-        return self._compute_yields_per_process_noBBB()
+    def expected_events_per_process_with_variance(self, cov, profile=True):
+        if profile:
+            return self._expvar_profiled(self._compute_yields_per_process, cov)
+        else:
+            return self._expvar_pedantic(self._compute_yields_per_process_noBBB, cov, skipBinByBinStat=True)
 
     @tf.function
-    def expected_events_inclusive_with_variance_noBBB(self, invhesschol):
-        return self._experr(self._compute_yields_inclusive_noBBB, invhesschol)
-
-    @tf.function
-    def expected_events_per_process_with_variance_noBBB(self, invhesschol):
-        return self._experr(self._compute_yields_per_process_noBBB, invhesschol, skipBinByBinStat=True)
+    def chi2(self, cov, profile=True):
+        if profile:
+            return self._chi2_profiled(self._compute_yields_inclusive, self.indata.data_obs, cov)
+        else:
+            return self._chi2(self._compute_yields_inclusive_noBBB, self.indata.data_obs, cov)
 
     def _compute_nll(self):
         theta = self.x[self.npoi:]
@@ -637,8 +721,7 @@ class Fitter:
         lfull = lnfull + lc
 
         if self.binByBinStat:
-            beta0 = tf.ones_like(beta)
-            lbetavfull = -self.indata.kstat*tf.math.log(beta/beta0) + self.indata.kstat*beta/beta0
+            lbetavfull = -self.indata.kstat*tf.math.log(beta/self.beta0) + self.indata.kstat*beta/self.beta0
 
             lbetav = lbetavfull - self.indata.kstat
             lbeta = tf.reduce_sum(lbetav)

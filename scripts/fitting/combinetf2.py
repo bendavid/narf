@@ -33,21 +33,18 @@ indata = narf.combineutils.FitInputData(args.filename, args.pseudoData, normaliz
 fitter = narf.combineutils.Fitter(indata, args)
 
 if args.toys == -1:
-    fitter.nobs.assign(fitter.expected_events_noBBB())
+    fitter.nobs.assign(fitter.expected_events(profile=False))
+
+cov_prefit = fitter.prefit_covariance()
 
 if args.saveHists:
 
-    invhessianprefit = fitter.prefit_covariance()
-
-    # for a diagonal matrix cholesky decomposition equivalent is equal to the element-wise sqrt
-    invhessianprefitchol = tf.sqrt(invhessianprefit)
-
     if args.computeHistErrors:
-        exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance_noBBB(invhessianprefitchol)
-        exp_pre_per_process, exp_pre_per_process_var = fitter.expected_events_per_process_with_variance_noBBB(invhessianprefitchol)
+        exp_pre_inclusive, exp_pre_inclusive_var = fitter.expected_events_inclusive_with_variance(cov_prefit, profile=False)
+        exp_pre_per_process, exp_pre_per_process_var = fitter.expected_events_per_process_with_variance(cov_prefit, profile=False)
     else:
-        exp_pre_inclusive = fitter.expected_events()
-        exp_pre_per_process = fitter.expected_events_per_process()
+        exp_pre_inclusive = fitter.expected_events(profile=False)
+        exp_pre_per_process = fitter.expected_events_per_process(profile=False)
 
     if args.computeVariations:
         exp_pre_inclusive_var_up = {}
@@ -58,17 +55,21 @@ if args.saveHists:
             var_name = fitter.parms[var_idx].decode('utf-8')
 
             fitter.x[var_idx].assign(1)
-            exp_pre_inclusive_var_up[var_name] = fitter.expected_events()
+            exp_pre_inclusive_var_up[var_name] = fitter.expected_events(profile=False)
 
             fitter.x[var_idx].assign(-1)
-            exp_pre_inclusive_var_down[var_name] = fitter.expected_events()
+            exp_pre_inclusive_var_down[var_name] = fitter.expected_events(profile=False)
 
             # set back to central value
             fitter.x[var_idx].assign(0)
 
-chi2_prefit = fitter.chi2(fitter.prefit_covariance())
+chi2_prefit = fitter.chi2(cov_prefit, profile=False)
 
-if args.toys >= 0 and args.externalPostfit is None:
+del cov_prefit
+
+dofit = args.toys >= 0 and args.externalPostfit is None
+
+if dofit:
     fitter.minimize()
 
 val, grad, hess = fitter.loss_val_grad_hess()
@@ -112,7 +113,22 @@ if args.externalPostfit is not None:
     fitter.x.assign(xvals)
     cov = tf.convert_to_tensor(covval)
 
-chi2_postfit = fitter.chi2(cov)
+if args.externalPostfit is None:
+    chi2_postfit = fitter.chi2(cov)
+else:
+    chi2_postfit = fitter.chi2_noBBB(cov)
+
+
+# glob = fitter._global_impacts(cov)
+# print(glob)
+#
+# # fitter._experr(fitter.expected_events_noBBB, cov)
+#
+# chisq = fitter.chi2(cov)
+#
+# print("chisq", chisq)
+#
+# quit()
 
 results = {
     "ndf_prefit": fitter.indata.nbins - fitter.indata.normalize,
@@ -123,14 +139,14 @@ results = {
 
 if args.saveHists:
 
-    covchol_ext = tf.linalg.cholesky(cov)
+    postfit_profile = args.externalPostfit is None
 
     if args.computeHistErrors:
-        exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance_noBBB(covchol_ext)
-        exp_post_per_process, exp_post_per_process_var = fitter.expected_events_per_process_with_variance_noBBB(covchol_ext)
+        exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(cov, profile=postfit_profile)
+        exp_post_per_process, exp_post_per_process_var = fitter.expected_events_per_process_with_variance(cov, profile=postfit_profile)
     else:
-        exp_post_inclusive = fitter.expected_events()
-        exp_post_per_process = fitter.expected_events_per_process()
+        exp_post_inclusive = fitter.expected_events(profile=postfit_profile)
+        exp_post_per_process = fitter.expected_events_per_process(profile=postfit_profile)
     
     if args.computeVariations:
         exp_post_inclusive_var_up = {}
@@ -142,10 +158,10 @@ if args.saveHists:
             var_name = fitter.parms[var_idx].decode('utf-8')
 
             fitter.x[var_idx].assign(central + variation)
-            exp_post_inclusive_var_up[var_name] = fitter.expected_events()
+            exp_post_inclusive_var_up[var_name] = fitter.expected_events(profile=postfit_profile)
 
             fitter.x[var_idx].assign(central - variation)
-            exp_post_inclusive_var_down[var_name] = fitter.expected_events()
+            exp_post_inclusive_var_down[var_name] = fitter.expected_events(profile=postfit_profile)
 
             # set back to central value
             fitter.x[var_idx].assign(central)
@@ -242,9 +258,10 @@ meta = {
 }
 
 outfolder = os.path.dirname(args.output)
-if not os.path.exists(outfolder):
-    print(f"Creating output folder {outfolder}")
-    os.makedirs(outfolder)
+if outfolder:
+    if not os.path.exists(outfolder):
+        print(f"Creating output folder {outfolder}")
+        os.makedirs(outfolder)
     
 with h5py.File(args.output, "w") as fout:
     narf.ioutils.pickle_dump_h5py("results", results, fout)
