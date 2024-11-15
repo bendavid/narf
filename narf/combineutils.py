@@ -691,6 +691,25 @@ class Fitter:
         else:
             return self._chi2(self._compute_yields_inclusive_noBBB, self.indata.data_obs, cov)
 
+    @tf.function
+    def saturated_nll(self):
+        nobs = self.nobs
+
+        nobsnull = tf.equal(nobs,tf.zeros_like(nobs))
+
+        #saturated model
+        nobssafe = tf.where(nobsnull, tf.ones_like(nobs), nobs)
+        lognobs = tf.math.log(nobssafe)
+
+        lsaturated = tf.reduce_sum(-nobs*lognobs + nobs, axis=-1)
+
+        return lsaturated
+
+    @tf.function
+    def full_nll(self):
+        l, lfull = self._compute_nll()
+        return lfull
+
     def _compute_nll(self):
         theta = self.x[self.npoi:]
 

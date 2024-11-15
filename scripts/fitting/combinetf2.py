@@ -63,7 +63,7 @@ if args.saveHists:
             # set back to central value
             fitter.x[var_idx].assign(0)
 
-chi2_prefit = fitter.chi2(cov_prefit, profile=False)
+chi2_prefit = fitter.chi2(cov_prefit, profile=False).numpy()
 
 del cov_prefit
 
@@ -113,33 +113,24 @@ if args.externalPostfit is not None:
     fitter.x.assign(xvals)
     cov = tf.convert_to_tensor(covval)
 
-if args.externalPostfit is None:
-    chi2_postfit = fitter.chi2(cov)
-else:
-    chi2_postfit = fitter.chi2_noBBB(cov)
 
+postfit_profile = args.externalPostfit is None
 
-# glob = fitter._global_impacts(cov)
-# print(glob)
-#
-# # fitter._experr(fitter.expected_events_noBBB, cov)
-#
-# chisq = fitter.chi2(cov)
-#
-# print("chisq", chisq)
-#
-# quit()
+chi2_postfit = fitter.chi2(cov, profile=postfit_profile).numpy()
+
+nllvalfull = fitter.full_nll().numpy()
+satnllvalfull = fitter.saturated_nll().numpy()
 
 results = {
     "ndf_prefit": fitter.indata.nbins - fitter.indata.normalize,
     "ndf_postfit": fitter.indata.nbins - fitter.indata.nsystnoconstraint - fitter.indata.nsignals - fitter.indata.normalize,
     "chi2_prefit": chi2_prefit,
-    "chi2_postfit": chi2_postfit
+    "chi2_postfit": chi2_postfit,
+    "nllvalfull" : nllvalfull,
+    "satnllvalfull" : satnllvalfull,
 }
 
 if args.saveHists:
-
-    postfit_profile = args.externalPostfit is None
 
     if args.computeHistErrors:
         exp_post_inclusive, exp_post_inclusive_var = fitter.expected_events_inclusive_with_variance(cov, profile=postfit_profile)
