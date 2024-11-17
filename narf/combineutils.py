@@ -431,15 +431,9 @@ class Fitter:
             grad = t1.gradient(val, self.x, unconnected_gradients="zero")
         pd2ldxdtheta0, pd2ldxdnobs, pd2ldxdbeta0 = t2.jacobian(grad, [self.theta0, self.nobs, self.beta0], unconnected_gradients="zero")
 
-        var_theta0 = tf.where(self.indata.constraintweights == 0., tf.zeros_like(self.indata.constraintweights), tf.math.reciprocal(self.indata.constraintweights))
-
-        dtheta0 = tf.math.sqrt(var_theta0)
-        dnobs = tf.math.sqrt(self.nobs)
-        dbeta0 = tf.math.sqrt(tf.math.reciprocal(self.indata.kstat))
-
-        dxdtheta0 = -(cov @ pd2ldxdtheta0)*dtheta0[None, :]
-        dxdnobs = -(cov @ pd2ldxdnobs)*dnobs[None, :]
-        dxdbeta0 = -(cov @ pd2ldxdbeta0)*dbeta0[None, :]
+        dxdtheta0 = -cov @ pd2ldxdtheta0
+        dxdnobs = -cov @ pd2ldxdnobs
+        dxdbeta0 = -cov @ pd2ldxdbeta0
 
         return dxdtheta0, dxdnobs, dxdbeta0
 
@@ -456,6 +450,18 @@ class Fitter:
         dexpdtheta0 = pdexpdtheta0 + pdexpdx @ dxdtheta0
         dexpdnobs = pdexpdnobs + pdexpdx @ dxdnobs
         dexpdbeta0 = pdexpdbeta0 + pdexpdx @ dxdbeta0
+
+        # FIXME factorize this part better with the global impacts calculation
+
+        var_theta0 = tf.where(self.indata.constraintweights == 0., tf.zeros_like(self.indata.constraintweights), tf.math.reciprocal(self.indata.constraintweights))
+
+        dtheta0 = tf.math.sqrt(var_theta0)
+        dnobs = tf.math.sqrt(self.nobs)
+        dbeta0 = tf.math.sqrt(tf.math.reciprocal(self.indata.kstat))
+
+        dexpdtheta0 *= dtheta0[None, :]
+        dexpdnobs *= dnobs[None, :]
+        dexpdbeta0 *= dbeta0[None, :]
 
         if compute_cov:
             expcov = dexpdtheta0 @ tf.transpose(dexpdtheta0) + dexpdnobs @ tf.transpose(dexpdnobs)
