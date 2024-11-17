@@ -812,6 +812,32 @@ class Fitter:
         else:
             return h
 
+    def observed_hists(self):
+        hists_data_obs = {}
+        hists_nobs = {}
+
+        for channel, info in self.indata.channel_info.items():
+            if "masked" not in channel:
+
+                axes = info["axes"]
+
+                start = info["start"]
+                stop = info["stop"]
+
+                shape = tuple([len(a) for a in axes])
+
+                hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
+                hist_data_obs.values()[...] = memoryview(tf.reshape(self.indata.data_obs[start:stop], shape))
+                hist_data_obs.variances()[...] = hist_data_obs.values()
+                hists_data_obs[channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
+
+                hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
+                hist_nobs.values()[...] = memoryview(tf.reshape(self.nobs.value()[start:stop], shape))
+                hist_nobs.variances()[...] = hist_nobs.values()
+                hists_nobs[channel] = narf.ioutils.H5PickleProxy(hist_nobs)
+
+        return hists_data_obs, hists_nobs
+
     @tf.function
     def expected_events(self, profile=True):
         return self._compute_yields(inclusive=True, profile=profile)

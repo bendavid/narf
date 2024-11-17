@@ -36,11 +36,35 @@ fitter = narf.combineutils.Fitter(indata, args)
 if args.toys == -1:
     fitter.nobs.assign(fitter.expected_events(profile=False))
 
+cov_prefit = fitter.prefit_covariance()
+
 results = {}
+
+results["projections"] = []
+for projection in args.project:
+    channel = projection[0]
+    axes = projection[1:]
+
+    results["projections"].append({"channel" : channel, "axes" : axes})
 
 if args.saveHists:
 
-    cov_prefit = fitter.prefit_covariance()
+    hist_data_obs, hist_nobs = fitter.observed_hists()
+    results.update({"hist_data_obs" : hist_data_obs,
+                    "hist_nobs" : hist_nobs,})
+
+    for projection in results["projections"]:
+        channel = projection["channel"]
+        axes = projection["axes"]
+
+        hist_data_obs = results["hist_data_obs"][channel].get().project(*axes)
+        hist_nobs = results["hist_nobs"][channel].get().project(*axes)
+
+        hist_data_obs = narf.ioutils.H5PickleProxy(hist_data_obs)
+        hist_nobs = narf.ioutils.H5PickleProxy(hist_nobs)
+
+        projection.update({"hist_data_obs" : hist_data_obs,
+                    "hist_nobs" : hist_nobs,})
 
     hist_prefit_inclusive, chi2_prefit, ndf_prefit = fitter.expected_hists(cov_prefit, inclusive=True, profile=False, compute_variance=args.computeHistErrors, compute_chi2=True, name = "prefit_inclusive", label = "prefit expected number of events for all processes combined")
 
@@ -52,13 +76,6 @@ if args.saveHists:
         "ndf_prefit": ndf_prefit,
         "chi2_prefit": chi2_prefit,
     })
-
-    results["projections"] = []
-    for projection in args.project:
-        channel = projection[0]
-        axes = projection[1:]
-
-        results["projections"].append({"channel" : channel, "axes" : axes})
 
     for projection in results["projections"]:
         channel = projection["channel"]
@@ -77,9 +94,6 @@ if args.saveHists:
             "chi2_prefit": chi2_prefit,
         })
 
-    del cov_prefit
-
-
     if args.computeVariations:
         cov_prefit_variations = fitter.prefit_covariance(unconstrained_err=1.)
 
@@ -95,7 +109,7 @@ if args.saveHists:
 
             hist_prefit_variations = fitter.expected_projection_hist(cov=cov_prefit_variations, channel=channel, axes=axes, inclusive=True, profile=False, compute_variance=False, compute_variations=True, name = f"prefit_inclusive_variations_projection_f{channel}_f{axes_str}", label = f"prefit expected number of events with variations of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
 
-            results["hist_prefit_variations"] = hist_prefit_variations
+            projection["hist_prefit_variations"] = hist_prefit_variations
 
         del cov_prefit_variations
 
@@ -122,7 +136,7 @@ if args.externalPostfit is not None:
     # FIXME do this without explicit loops and ideally in tensorflow directly
 
     xvals = fitter.x.numpy()
-    covval = invhessianprefit.numpy()
+    covval = cov_prefit.numpy()
 
     parmmap = {}
 
@@ -207,7 +221,7 @@ if args.saveHists:
 
             hist_postfit_variations = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, name = f"postfit_inclusive_variations_projection_f{channel}_f{axes_str}", label = f"postfit expected number of events with variations of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
 
-            results["hist_postfit_variations"] = hist_postfit_variations
+            projection["hist_postfit_variations"] = hist_postfit_variations
 
 # pass meta data into output file
 meta = {
