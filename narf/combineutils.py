@@ -453,7 +453,6 @@ class Fitter:
 
         pdexpdx, pdexpdtheta0, pdexpdnobs, pdexpdbeta0 = t.jacobian(expected_flat, [self.x, self.theta0, self.nobs, self.beta0], unconnected_gradients="zero")
 
-
         dexpdtheta0 = pdexpdtheta0 + pdexpdx @ dxdtheta0
         dexpdnobs = pdexpdnobs + pdexpdx @ dxdnobs
         dexpdbeta0 = pdexpdbeta0 + pdexpdx @ dxdbeta0
@@ -520,12 +519,17 @@ class Fitter:
         #FIXME switch back to optimized version at some point?
 
         with tf.GradientTape() as t:
-            t.watch(self.beta0)
+            t.watch([self.nobs, self.beta0])
             expected = fun_exp()
             expected_flat = tf.reshape(expected, (-1,))
-        dexpdx, dexpdbeta0 = t.jacobian(expected_flat, [self.x, self.beta0], unconnected_gradients="zero")
+        dexpdx, dexpdnobs, dexpdbeta0 = t.jacobian(expected_flat, [self.x, self.nobs, self.beta0])
 
         cov = dexpdx @ tf.matmul(invhess, dexpdx, transpose_b = True)
+
+        if dexpdnobs is not None:
+            varnobs = self.nobs
+            cov += dexpdnobs @ (varnobs[:, None] * tf.transpose(dexpdnobs))
+
         if self.binByBinStat:
             varbeta0 = tf.math.reciprocal(self.indata.kstat)
             cov += dexpdbeta0 @ (varbeta0[:, None] * tf.transpose(dexpdbeta0))
@@ -547,7 +551,7 @@ class Fitter:
             # construct the matrix such that the columns represent
             # the variations associated with profiling a given parameter
             # taking into account its correlations with the other parameters
-            dx = tf.math.sqrt(tf.linalg.diag_part(cov))[None, :]*cov
+            dx = cov/tf.math.sqrt(tf.linalg.diag_part(cov))[None, :]
 
             dexp = dexpdx @ dx
         else:
