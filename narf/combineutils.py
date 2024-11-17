@@ -634,10 +634,14 @@ class Fitter:
             # if options.saveHists:
             normfullcentral = ernorm*snormnorm
 
-        return nexpfullcentral, normfullcentral
+        if self.normalize:
+            # FIXME this should be done per-channel ideally
+            normscale = tf.reduce_sum(self.nobs)/tf.reduce_sum(nexpfullcentral)
 
-        # nexpfull = nexpfullcentral
-        # normfull = normfullcentral
+            nexpfullcentral *= normscale
+            normfullcentral *= normscale
+
+        return nexpfullcentral, normfullcentral
 
     def _compute_yields_with_beta(self, profile=True):
         nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
@@ -654,12 +658,12 @@ class Fitter:
             nexpfull = beta*nexpfullcentral
             normfull = beta[..., None]*normfullcentral
 
-        if self.normalize:
-            # FIXME this should be done per-channel ideally
-            normscale = tf.reduce_sum(self.nobs)/tf.reduce_sum(nexpfull)
+            if self.normalize:
+                # FIXME this is probably not fully consistent when combined with the binByBinStat
+                normscale = tf.reduce_sum(self.nobs)/tf.reduce_sum(nexpfull)
 
-            nexpfull *= normscale
-            normfull *= normscale
+                nexpfull *= normscale
+                normfull *= normscale
 
         return nexpfull, normfull, beta
 
