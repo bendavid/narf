@@ -537,18 +537,21 @@ class Fitter:
             var = tf.reshape(var, expected.shape)
             return expected, var
 
-    def _expvariations(self, fun_exp, cov):
+    def _expvariations(self, fun_exp, cov, correlations):
         with tf.GradientTape() as t:
             expected = fun_exp()
             expected_flat = tf.reshape(expected, (-1,))
         dexpdx = t.jacobian(expected_flat, self.x)
 
-        # construct the matrix such that the columns represent
-        # the variations associated with profiling a given parameter
-        # taking into account its correlations with the other parameters
-        dx = tf.math.sqrt(tf.linalg.diag_part(cov))[None, :]*cov
+        if correlations:
+            # construct the matrix such that the columns represent
+            # the variations associated with profiling a given parameter
+            # taking into account its correlations with the other parameters
+            dx = tf.math.sqrt(tf.linalg.diag_part(cov))[None, :]*cov
 
-        dexp = dexpdx @ dx
+            dexp = dexpdx @ dx
+        else:
+            dexp = dexpdx*tf.math.sqrt(tf.linalg.diag_part(cov))[None, :]
 
         dexp = tf.reshape(dexp, (*expected.shape, -1))
 
@@ -665,10 +668,10 @@ class Fitter:
             return self._expvar(fun, cov)
 
     @tf.function
-    def expected_variations(self, fun, cov):
-        return self._expvariations(fun, cov)
+    def expected_variations(self, fun, cov, correlations=False):
+        return self._expvariations(fun, cov, correlations=correlations)
 
-    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, profile=True, compute_chi2=False, name=None, label=None):
+    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, compute_chi2=False, name=None, label=None):
 
         def fun():
             return self._compute_yields(inclusive=inclusive, profile=profile)
@@ -679,7 +682,7 @@ class Fitter:
         if compute_variance:
             exp, var = self.expected_with_variance(fun, cov, profile=profile)
         elif compute_variations:
-            exp = self.expected_variations(fun, cov)
+            exp = self.expected_variations(fun, cov, correlations=correlated_variations)
         else:
             exp = tf.function(fun)()
 
@@ -725,7 +728,7 @@ class Fitter:
         else:
             return hists
 
-    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, profile=True, compute_chi2=False, name=None, label=None):
+    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, compute_chi2=False, name=None, label=None):
 
         def fun():
             return self._compute_yields(inclusive=inclusive, profile=profile)
@@ -787,7 +790,7 @@ class Fitter:
         if compute_variance:
             exp, var = self.expected_with_variance(projection_fun, cov, profile=profile)
         elif compute_variations:
-            exp = self.expected_variations(projection_fun, cov)
+            exp = self.expected_variations(projection_fun, cov, correlations=correlated_variations)
         else:
             exp = tf.function(projection_fun)()
 

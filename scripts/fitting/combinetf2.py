@@ -213,6 +213,10 @@ if args.saveHists:
 
         results["hist_postfit_variations"] = hist_postfit_variations
 
+        hist_postfit_variations_correlated = fitter.expected_hists(cov, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, correlated_variations=True, name = "hist_postfit_variations_correlated", label = "postfit expected number of events with variations of events (including correlations) for all processes combined")
+
+        results["hist_postfit_variations_correlated"] = hist_postfit_variations_correlated
+
         for projection in results["projections"]:
             channel = projection["channel"]
             axes = projection["axes"]
@@ -222,6 +226,10 @@ if args.saveHists:
             hist_postfit_variations = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, name = f"postfit_inclusive_variations_projection_f{channel}_f{axes_str}", label = f"postfit expected number of events with variations of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
 
             projection["hist_postfit_variations"] = hist_postfit_variations
+
+            hist_postfit_variations_correlated = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, correlated_variations=True, name = f"postfit_inclusive_variations_correlated_projection_f{channel}_f{axes_str}", label = f"postfit expected number of events with variations of events (including correlations) for all processes combined, projection for channel {channel} and axes {axes_str}.")
+
+            projection["hist_postfit_variations_correlated"] = hist_postfit_variations_correlated
 
 # pass meta data into output file
 meta = {
