@@ -206,7 +206,7 @@ if args.saveHists:
         })
 
     if args.computeVariations:
-        hist_postfit_variations = fitter.expected_hists(cov, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, name = "postfit_inclusive_variations", label = "postfit expected number of events with variations of events for all processes combined")
+        hist_postfit_variations = fitter.expected_hists(cov, inclusive=True, profile=postfit_profile, profile_grad=False, compute_variance=False, compute_variations=True, name = "postfit_inclusive_variations", label = "postfit expected number of events with variations of events for all processes combined")
 
         results["hist_postfit_variations"] = hist_postfit_variations
 
@@ -220,7 +220,7 @@ if args.saveHists:
 
             axes_str = "-".join(axes)
 
-            hist_postfit_variations = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, name = f"postfit_inclusive_variations_projection_f{channel}_f{axes_str}", label = f"postfit expected number of events with variations of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
+            hist_postfit_variations = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, profile_grad=False, compute_variance=False, compute_variations=True, name = f"postfit_inclusive_variations_projection_f{channel}_f{axes_str}", label = f"postfit expected number of events with variations of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
 
             projection["hist_postfit_variations"] = hist_postfit_variations
 

@@ -643,7 +643,7 @@ class Fitter:
 
         return nexpfullcentral, normfullcentral
 
-    def _compute_yields_with_beta(self, profile=True):
+    def _compute_yields_with_beta(self, profile=True, profile_grad=True):
         nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
 
         nexpfull = nexpfullcentral
@@ -653,6 +653,8 @@ class Fitter:
         if self.binByBinStat:
             if profile:
                 beta = (self.nobs + self.indata.kstat)/(nexpfullcentral+self.indata.kstat)
+                if not profile_grad:
+                    beta = tf.stop_gradient(beta)
             else:
                 beta = self.beta0
             nexpfull = beta*nexpfullcentral
@@ -667,8 +669,8 @@ class Fitter:
 
         return nexpfull, normfull, beta
 
-    def _compute_yields(self, inclusive=True, profile=True):
-        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile)
+    def _compute_yields(self, inclusive=True, profile=True, profile_grad=True):
+        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad)
         if inclusive:
             return nexpfullcentral
         else:
@@ -685,10 +687,10 @@ class Fitter:
     def expected_variations(self, fun, cov, correlations=False):
         return self._expvariations(fun, cov, correlations=correlations)
 
-    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, compute_chi2=False, name=None, label=None):
+    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None):
 
         def fun():
-            return self._compute_yields(inclusive=inclusive, profile=profile)
+            return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
 
         if compute_variance and compute_variations:
             raise NotImplementedError()
@@ -742,10 +744,10 @@ class Fitter:
         else:
             return hists
 
-    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, compute_chi2=False, name=None, label=None):
+    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None):
 
         def fun():
-            return self._compute_yields(inclusive=inclusive, profile=profile)
+            return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
 
         info = self.indata.channel_info[channel]
         start = info["start"]
