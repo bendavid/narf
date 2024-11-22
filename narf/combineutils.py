@@ -4,6 +4,7 @@ import numpy as np
 import scipy
 import h5py
 import hist
+import narf.ioutils
 
 class SimpleSparseTensor:
     def __init__(self, indices, values, dense_shape):
@@ -134,6 +135,24 @@ class FitInputData:
                 if self.nbinsmasked > 0:
                     self.channel_info["ch1_masked"] = {"axes": [hist.axis.Integer(0, self.nbinsmasked, underflow=False, overflow=False, name="masked")]}
 
+            # compute indices for channels
+            ibin = 0
+            for channel, info in self.channel_info.items():
+                axes = info["axes"]
+                shape = tuple([len(a) for a in axes])
+                size = np.prod(shape)
+
+                start = ibin
+                stop = start + size
+
+                info["start"] = start
+                info["stop"] = stop
+
+                ibin = stop
+
+            for channel, info in self.channel_info.items():
+                print(channel, info)
+
             self.axis_procs = hist.axis.StrCategory(self.procs, name="processes")                
 
             #build tensorflow graph for likelihood calculation
@@ -169,6 +188,7 @@ class FitInputData:
             self.normalize = normalize
             if self.normalize:
                 # normalize predictoin and each systematic to total event yield in data
+                # FIXME this should be done per-channel ideally
 
                 data_sum = tf.reduce_sum(self.data_obs)
                 norm_sum = tf.reduce_sum(self.norm)
@@ -218,7 +238,7 @@ class FitDebugData:
         for channel, info in self.indata.channel_info.items():
             axes = info["axes"]
             shape = [len(a) for a in axes]
-            stop = ibin+np.product(shape)
+            stop = ibin+np.prod(shape)
 
             shape_norm = [*shape, self.indata.nproc]
             shape_logk = [*shape, self.indata.nproc, 2, self.indata.nsyst]
@@ -324,6 +344,7 @@ class Fitter:
     def __init__(self, indata, options):
         self.indata = indata
         self.binByBinStat = options.binByBinStat
+        self.normalize = options.normalize
         self.systgroupsfull = self.indata.systgroups.tolist()
         self.systgroupsfull.append("stat")
         if self.binByBinStat:
@@ -368,25 +389,22 @@ class Fitter:
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
 
-        nexpfullcentral = self.expected_events_noBBB()
+        # global observables for mc stat uncertainty
+        self.beta0 = tf.ones_like(self.indata.data_obs)
+
+        nexpfullcentral = self.expected_events(profile=False)
         self.nexpnom = tf.Variable(nexpfullcentral, trainable=False, name="nexpnom")
 
-    def prefit_covariance(self):
+    def prefit_covariance(self, unconstrained_err=0.):
         # free parameters are taken to have zero uncertainty for the purposes of prefit uncertainties
         var_poi = tf.zeros([self.npoi], dtype=self.indata.dtype)
 
         # nuisances have their uncertainty taken from the constraint term, but unconstrained nuisances
-        # are set to zero uncertainty for the purposes of prefit uncertainties
-        var_theta = tf.where(self.indata.constraintweights == 0., 0., tf.math.reciprocal(self.indata.constraintweights))
+        # are set to a placeholder uncertainty (zero by default) for the purposes of prefit uncertainties
+        var_theta = tf.where(self.indata.constraintweights == 0., unconstrained_err, tf.math.reciprocal(self.indata.constraintweights))
 
         invhessianprefit = tf.linalg.diag(tf.concat([var_poi, var_theta], axis = 0))
         return invhessianprefit
-
-    def chi2(self, invhess):
-        chi2 = self._chi2_pedantic(self._compute_yields_inclusive, self.indata.data_obs, invhess)
-        chi2_val = np.array([1])
-        chi2_val[...] = memoryview(chi2)
-        return chi2_val[0]
 
     @tf.function
     def val_jac(self, fun, *args, **kwargs):
@@ -404,8 +422,66 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
-    def _experr(self, fun_exp, invhesschol, skipBinByBinStat = False):
+    def _global_impacts(self, cov):
+        with tf.GradientTape() as t2:
+            t2.watch([self.theta0, self.nobs, self.beta0])
+            with tf.GradientTape() as t1:
+                t1.watch([self.theta0, self.nobs, self.beta0])
+                val = self._compute_loss()
+            grad = t1.gradient(val, self.x, unconnected_gradients="zero")
+        pd2ldxdtheta0, pd2ldxdnobs, pd2ldxdbeta0 = t2.jacobian(grad, [self.theta0, self.nobs, self.beta0], unconnected_gradients="zero")
+
+        dxdtheta0 = -cov @ pd2ldxdtheta0
+        dxdnobs = -cov @ pd2ldxdnobs
+        dxdbeta0 = -cov @ pd2ldxdbeta0
+
+        return dxdtheta0, dxdnobs, dxdbeta0
+
+    def _expvar_profiled(self, fun_exp, cov, compute_cov=False):
+        dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
+
+        with tf.GradientTape() as t:
+            t.watch([self.theta0, self.nobs, self.beta0])
+            expected = fun_exp()
+            expected_flat = tf.reshape(expected, (-1,))
+
+        pdexpdx, pdexpdtheta0, pdexpdnobs, pdexpdbeta0 = t.jacobian(expected_flat, [self.x, self.theta0, self.nobs, self.beta0], unconnected_gradients="zero")
+
+        dexpdtheta0 = pdexpdtheta0 + pdexpdx @ dxdtheta0
+        dexpdnobs = pdexpdnobs + pdexpdx @ dxdnobs
+        dexpdbeta0 = pdexpdbeta0 + pdexpdx @ dxdbeta0
+
+        # FIXME factorize this part better with the global impacts calculation
+
+        var_theta0 = tf.where(self.indata.constraintweights == 0., tf.zeros_like(self.indata.constraintweights), tf.math.reciprocal(self.indata.constraintweights))
+
+        dtheta0 = tf.math.sqrt(var_theta0)
+        dnobs = tf.math.sqrt(self.nobs)
+        dbeta0 = tf.math.sqrt(tf.math.reciprocal(self.indata.kstat))
+
+        dexpdtheta0 *= dtheta0[None, :]
+        dexpdnobs *= dnobs[None, :]
+        dexpdbeta0 *= dbeta0[None, :]
+
+        if compute_cov:
+            expcov = dexpdtheta0 @ tf.transpose(dexpdtheta0) + dexpdnobs @ tf.transpose(dexpdnobs)
+            if self.binByBinStat:
+                expcov += dexpdbeta0 @ tf.transpose(dexpdbeta0)
+            return expected, expcov
+        else:
+            expvar = tf.reduce_sum(tf.square(dexpdtheta0), axis=-1) + tf.reduce_sum(tf.square(dexpdnobs), axis=-1)
+            if self.binByBinStat:
+                expvar += tf.reduce_sum(tf.square(dexpdbeta0), axis=-1)
+
+            expvar = tf.reshape(expvar, expected.shape)
+
+            return expected, expvar
+
+    def _expvar_optimized(self, fun_exp, cov, skipBinByBinStat = False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
+
+        #FIXME this doesn't actually work for the positive semi-definite case
+        invhesschol = tf.linalg.cholesky(cov)
 
         # since the full covariance matrix with respect to the bin counts is given by J^T R^T R J, then summing RJ element-wise squared over the parameter axis gives the diagonal elements
 
@@ -432,54 +508,69 @@ class Fitter:
             sRJ2 = sRJ2 + sumw2
         return expected, sRJ2
 
-    def _chi2_pedantic(self, fun_exp, observed, invhess):
+    def _chi2(self, fun, cov, profile=True):
+        if profile:
+            res, rescov = self._expvar_profiled(fun, cov, compute_cov=True)
+        else:
+            res, rescov = self._expvar(fun, cov, compute_cov=True)
+
+        resv = tf.reshape(res, (-1,1))
+
+        chi_square_value = tf.transpose(resv) @ tf.linalg.solve(rescov, resv)
+
+        return chi_square_value[0,0]
+
+    def _expvar(self, fun_exp, invhess, compute_cov=False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
-        # (extremely cpu and memory-inefficient version for validation purposes only)
+        #FIXME switch back to optimized version at some point?
 
         with tf.GradientTape() as t:
+            t.watch([self.nobs, self.beta0])
             expected = fun_exp()
-            J = t.jacobian(expected, self.x)
+            expected_flat = tf.reshape(expected, (-1,))
+        dexpdx, dexpdnobs, dexpdbeta0 = t.jacobian(expected_flat, [self.x, self.nobs, self.beta0])
 
-        residual = observed - expected
-        residual_flat = tf.reshape(residual, (-1, 1))
+        cov = dexpdx @ tf.matmul(invhess, dexpdx, transpose_b = True)
 
-        # error propagation of covariance between nuisances into covariance between bins
-        K = J @invhess @ tf.transpose(J)
-        # add data uncertainty on covariance
-        K = K + tf.linalg.diag(observed)
+        if dexpdnobs is not None:
+            varnobs = self.nobs
+            cov += dexpdnobs @ (varnobs[:, None] * tf.transpose(dexpdnobs))
+
         if self.binByBinStat:
-            # add MC stat uncertainty on covariance
-            sumw2 = tf.square(expected)/self.indata.kstat
-            K = K + tf.linalg.diag(sumw2)
-        
-        Kinv = tf.linalg.inv(K)
+            varbeta0 = tf.math.reciprocal(self.indata.kstat)
+            cov += dexpdbeta0 @ (varbeta0[:, None] * tf.transpose(dexpdbeta0))
 
-        # chi2 = uT*Kinv*u
-        chi_square_value = tf.transpose(residual_flat) @ Kinv @ residual_flat
+        if compute_cov:
+            return expected, cov
+        else:
+            var = tf.linalg.diag_part(cov)
+            var = tf.reshape(var, expected.shape)
+            return expected, var
 
-        return chi_square_value
-
-    def _experr_pedantic(self, fun_exp, invhess):
-        # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
-        # (extremely cpu and memory-inefficient version for validation purposes only)
-
+    def _expvariations(self, fun_exp, cov, correlations):
         with tf.GradientTape() as t:
             expected = fun_exp()
-            expected_flat = tf.reshape(expected, (-1, 1))
-        J = t.jacobian(expected_flat, self.x)
+            expected_flat = tf.reshape(expected, (-1,))
+        dexpdx = t.jacobian(expected_flat, self.x)
 
-        cov = J @ tf.matmul(invhess, J, transpose_b = True)
+        if correlations:
+            # construct the matrix such that the columns represent
+            # the variations associated with profiling a given parameter
+            # taking into account its correlations with the other parameters
+            dx = cov/tf.math.sqrt(tf.linalg.diag_part(cov))[None, :]
 
-        err = tf.linalg.diag_part(cov)
-        err = tf.reshape(err, expected.shape)
+            dexp = dexpdx @ dx
+        else:
+            dexp = dexpdx*tf.math.sqrt(tf.linalg.diag_part(cov))[None, :]
 
-        if self.binByBinStat:
-            # add MC stat uncertainty on variance
-            sumw2 = tf.square(expected)/self.indata.kstat
-            err = err + sumw2
+        dexp = tf.reshape(dexp, (*expected.shape, -1))
 
-        return expected, err
+        down = expected[..., None] - dexp
+        up = expected[..., None] + dexp
 
+        expvars = tf.stack([down, up], axis=-1)
+
+        return expvars
 
     def _compute_yields_noBBB(self):
         xpoi = self.x[:self.npoi]
@@ -543,12 +634,16 @@ class Fitter:
             # if options.saveHists:
             normfullcentral = ernorm*snormnorm
 
+        if self.normalize:
+            # FIXME this should be done per-channel ideally
+            normscale = tf.reduce_sum(self.nobs)/tf.reduce_sum(nexpfullcentral)
+
+            nexpfullcentral *= normscale
+            normfullcentral *= normscale
+
         return nexpfullcentral, normfullcentral
 
-        # nexpfull = nexpfullcentral
-        # normfull = normfullcentral
-
-    def _compute_yields(self):
+    def _compute_yields_with_beta(self, profile=True, profile_grad=True):
         nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
 
         nexpfull = nexpfullcentral
@@ -556,61 +651,245 @@ class Fitter:
 
         beta = None
         if self.binByBinStat:
-            beta = (self.nobs + self.indata.kstat)/(nexpfullcentral+self.indata.kstat)
-            # tf.print("beta", beta)
-            # print("beta.shape", beta.shape)
-            # print("nexpfullcentral.shape", nexpfullcentral.shape)
-            # betadiff = tf.reduce_max(tf.abs(beta-1.))
-            # tf.print("betadiff", betadiff)
+            if profile:
+                beta = (self.nobs + self.indata.kstat)/(nexpfullcentral+self.indata.kstat)
+                if not profile_grad:
+                    beta = tf.stop_gradient(beta)
+            else:
+                beta = self.beta0
             nexpfull = beta*nexpfullcentral
             normfull = beta[..., None]*normfullcentral
 
+            if self.normalize:
+                # FIXME this is probably not fully consistent when combined with the binByBinStat
+                normscale = tf.reduce_sum(self.nobs)/tf.reduce_sum(nexpfull)
+
+                nexpfull *= normscale
+                normfull *= normscale
+
         return nexpfull, normfull, beta
 
-    def _compute_yields_inclusive(self):
-        nexpfullcentral, normfullcentral, beta = self._compute_yields()
-        return nexpfullcentral
-
-    def _compute_yields_per_process(self):
-        nexpfullcentral, normfullcentral, beta = self._compute_yields()
-        return normfullcentral
-
-    def _compute_yields_inclusive_noBBB(self):
-        nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
-        return nexpfullcentral
-
-    def _compute_yields_per_process_noBBB(self):
-        nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
-        return normfullcentral
+    def _compute_yields(self, inclusive=True, profile=True, profile_grad=True):
+        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad)
+        if inclusive:
+            return nexpfullcentral
+        else:
+            return normfullcentral
 
     @tf.function
-    def expected_events(self):
-        return self._compute_yields_inclusive()
+    def expected_with_variance(self, fun, cov, profile=True):
+        if profile:
+            return self._expvar_profiled(fun, cov)
+        else:
+            return self._expvar(fun, cov)
 
     @tf.function
-    def expected_events_noBBB(self):
-        return self._compute_yields_inclusive_noBBB()
+    def expected_variations(self, fun, cov, correlations=False):
+        return self._expvariations(fun, cov, correlations=correlations)
+
+    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None):
+
+        def fun():
+            return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
+
+        if compute_variance and compute_variations:
+            raise NotImplementedError()
+
+        if compute_variance:
+            exp, var = self.expected_with_variance(fun, cov, profile=profile)
+        elif compute_variations:
+            exp = self.expected_variations(fun, cov, correlations=correlated_variations)
+        else:
+            exp = tf.function(fun)()
+
+        hists = {}
+
+        for channel, info in self.indata.channel_info.items():
+            if "masked" not in channel:
+
+                axes = info["axes"]
+
+                start = info["start"]
+                stop = info["stop"]
+
+                hist_axes = axes.copy()
+
+                if not inclusive:
+                    hist_axes.append(self.indata.axis_procs)
+
+                if compute_variations:
+                    axis_vars = hist.axis.StrCategory(self.parms, name="vars")
+                    axis_downUpVar = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar")
+
+                    hist_axes.extend([axis_vars, axis_downUpVar])
+
+                shape = tuple([len(a) for a in hist_axes])
+
+                h = hist.Hist(*hist_axes, storage=hist.storage.Weight(), name=f"name_{channel}", label=label)
+                h.values()[...] = memoryview(tf.reshape(exp[start:stop], shape))
+                if compute_variance:
+                    h.variances()[...] = memoryview(tf.reshape(var[start:stop], shape))
+                else:
+                    h.variances()[...] = 0.
+                hists[channel] = narf.ioutils.H5PickleProxy(h)
+
+        if compute_chi2:
+            def fun_residual():
+                return fun() - self.nobs
+
+            chi2val = self.chi2(fun_residual, cov, profile=profile).numpy()
+            ndf = tf.size(exp).numpy() - self.normalize
+
+            return hists, chi2val, ndf
+        else:
+            return hists
+
+    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None):
+
+        def fun():
+            return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
+
+        info = self.indata.channel_info[channel]
+        start = info["start"]
+        stop = info["stop"]
+
+        channel_axes = info["axes"]
+
+        exp_axes = channel_axes.copy()
+        hist_axes = [axis for axis in channel_axes if axis.name in axes]
+
+        if len(hist_axes) != len(axes):
+            raise ValueError("axis not found")
+
+        extra_axes = []
+        if not inclusive:
+            exp_axes.append(self.indata.axis_procs)
+            hist_axes.append(self.indata.axis_procs)
+            extra_axes.append(self.indata.axis_procs)
+
+        if compute_variations:
+            axis_vars = hist.axis.StrCategory(self.parms, name="vars")
+            axis_downUpVar = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar")
+
+            hist_axes.extend([axis_vars, axis_downUpVar])
+
+        exp_shape = tuple([len(a) for a in exp_axes])
+
+        channel_axes_names = [axis.name for axis in channel_axes]
+        exp_axes_names = [axis.name for axis in exp_axes]
+        extra_axes_names = [axis.name for axis in extra_axes]
+
+        axis_idxs = [channel_axes_names.index(axis) for axis in axes]
+
+        proj_idxs = [i for i in range(len(channel_axes)) if i not in axis_idxs]
+
+        post_proj_axes_names = [axis for axis in channel_axes_names if axis in axes] + extra_axes_names
+
+        transpose_idxs = [post_proj_axes_names.index(axis) for axis in axes] +  [post_proj_axes_names.index(axis) for axis in extra_axes_names]
+
+        def make_projection_fun(fun_flat):
+            def proj_fun():
+                exp = fun_flat()[start:stop]
+                exp = tf.reshape(exp, exp_shape)
+                exp = tf.reduce_sum(exp, axis=proj_idxs)
+                exp = tf.transpose(exp, perm=transpose_idxs)
+
+                return exp
+
+            return proj_fun
+
+        projection_fun = make_projection_fun(fun)
+
+        if compute_variance and compute_variations:
+            raise NotImplementedError()
+
+        if compute_variance:
+            exp, var = self.expected_with_variance(projection_fun, cov, profile=profile)
+        elif compute_variations:
+            exp = self.expected_variations(projection_fun, cov, correlations=correlated_variations)
+        else:
+            exp = tf.function(projection_fun)()
+
+        h = hist.Hist(*hist_axes, storage=hist.storage.Weight(), name=name, label=label)
+        h.values()[...] = memoryview(exp)
+        if compute_variance:
+            h.variances()[...] = memoryview(var)
+        else:
+            h.variances()[...] = 0.
+        h = narf.ioutils.H5PickleProxy(h)
+
+        if compute_chi2:
+            def fun_residual():
+                return fun() - self.nobs
+
+            projection_fun_residual = make_projection_fun(fun_residual)
+
+            chi2val = self.chi2(projection_fun_residual, cov, profile=profile).numpy()
+            ndf = tf.size(exp).numpy() - self.normalize
+
+            return h, chi2val, ndf
+        else:
+            return h
+
+    def observed_hists(self):
+        hists_data_obs = {}
+        hists_nobs = {}
+
+        for channel, info in self.indata.channel_info.items():
+            if "masked" not in channel:
+
+                axes = info["axes"]
+
+                start = info["start"]
+                stop = info["stop"]
+
+                shape = tuple([len(a) for a in axes])
+
+                hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
+                hist_data_obs.values()[...] = memoryview(tf.reshape(self.indata.data_obs[start:stop], shape))
+                hist_data_obs.variances()[...] = hist_data_obs.values()
+                hists_data_obs[channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
+
+                hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
+                hist_nobs.values()[...] = memoryview(tf.reshape(self.nobs.value()[start:stop], shape))
+                hist_nobs.variances()[...] = hist_nobs.values()
+                hists_nobs[channel] = narf.ioutils.H5PickleProxy(hist_nobs)
+
+        return hists_data_obs, hists_nobs
 
     @tf.function
-    def expected_events_per_process(self):
-        return self._compute_yields_per_process()
+    def expected_events(self, profile=True):
+        return self._compute_yields(inclusive=True, profile=profile)
 
     @tf.function
-    def expected_events_per_process_noBBB(self):
-        return self._compute_yields_per_process_noBBB()
+    def chi2(self, fun, cov, profile=True):
+        return self._chi2(fun, cov, profile=profile)
 
     @tf.function
-    def expected_events_inclusive_with_variance_noBBB(self, invhesschol):
-        return self._experr(self._compute_yields_inclusive_noBBB, invhesschol)
+    def saturated_nll(self):
+        nobs = self.nobs
+
+        nobsnull = tf.equal(nobs,tf.zeros_like(nobs))
+
+        #saturated model
+        nobssafe = tf.where(nobsnull, tf.ones_like(nobs), nobs)
+        lognobs = tf.math.log(nobssafe)
+
+        lsaturated = tf.reduce_sum(-nobs*lognobs + nobs, axis=-1)
+
+        ndof = tf.size(nobs) - self.npoi - self.indata.nsystnoconstraint - self.normalize
+
+        return lsaturated, ndof
 
     @tf.function
-    def expected_events_per_process_with_variance_noBBB(self, invhesschol):
-        return self._experr(self._compute_yields_per_process_noBBB, invhesschol, skipBinByBinStat=True)
+    def full_nll(self):
+        l, lfull = self._compute_nll()
+        return lfull
 
     def _compute_nll(self):
         theta = self.x[self.npoi:]
 
-        nexpfullcentral, normfullcentral, beta = self._compute_yields()
+        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta()
 
         nexp = nexpfullcentral
 
@@ -637,8 +916,7 @@ class Fitter:
         lfull = lnfull + lc
 
         if self.binByBinStat:
-            beta0 = tf.ones_like(beta)
-            lbetavfull = -self.indata.kstat*tf.math.log(beta/beta0) + self.indata.kstat*beta/beta0
+            lbetavfull = -self.indata.kstat*tf.math.log(beta/self.beta0) + self.indata.kstat*beta/self.beta0
 
             lbetav = lbetavfull - self.indata.kstat
             lbeta = tf.reduce_sum(lbetav)
