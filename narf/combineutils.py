@@ -744,7 +744,7 @@ class Fitter:
         else:
             return hists
 
-    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None):
+    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None, exp_transform=False):
 
         def fun():
             return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
@@ -774,6 +774,7 @@ class Fitter:
             hist_axes.extend([axis_vars, axis_downUpVar])
 
         exp_shape = tuple([len(a) for a in exp_axes])
+        print("exp_shape",exp_shape)
 
         channel_axes_names = [axis.name for axis in channel_axes]
         exp_axes_names = [axis.name for axis in exp_axes]
@@ -791,6 +792,8 @@ class Fitter:
             def proj_fun():
                 exp = fun_flat()[start:stop]
                 exp = tf.reshape(exp, exp_shape)
+                if exp_transform:
+                    exp = 100000*tf.math.log(exp)
                 exp = tf.reduce_sum(exp, axis=proj_idxs)
                 exp = tf.transpose(exp, perm=transpose_idxs)
 
