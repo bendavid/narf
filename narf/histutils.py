@@ -159,54 +159,78 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if force_atomic is None:
         force_atomic = ROOT.ROOT.IsImplicitMTEnabled()
 
-    #TODO this code can be shared with root histogram version
+    #TODO some of this code can be shared with root histogram version
+
+    #FIXME make this more generic
+    accumulator_args = 1 if (isinstance(storage, bh.storage.Mean) or isinstance(storage, bh.storage.WeightedMean)) else 0
+
+    if accumulator_args:
+        raise NotImplementedError(f"Storage type {type(storage)} takes accumulator arguments, which is not supported currently.")
+
+    nargs = len(axes) + accumulator_args
+
+    if len(cols) < nargs:
+        raise RuntimeError(f"Mismatched number of columns and axes for axes {axes}, storage {storage} and columns {cols}")
 
     coltypes = [df.GetColumnType(col) for col in cols]
 
-    has_weight = len(cols) == (len(axes) + 1)
     tensor_weight = False
+    tensor_scalar_type = None
+    tensor_shape = []
+
+    for coltype in coltypes[nargs:]:
+        traits = ROOT.narf.tensor_traits[coltype]
+
+        if traits.is_tensor:
+            if tensor_weight:
+                raise NotImplementedError("Multiple tensor weights are not currently supported.")
+
+            if tensor_weight and traits.tensor_type.Scalar != tensor_scalar_type:
+                raise RuntimeError(f"Incompatible tensor types {traits.tensor_type} and {tensor_type}")
+
+            tensor_weight = True
+            tensor_scalar_type = traits.tensor_type.Scalar
+            # TODO also/instead handle the case that tensor axes are in common and elements should be multiplied directly
+            # instead of concatenating the axes?
+            tensor_shape.extend(traits.get_sizes())
+
     python_axes = axes.copy()
 
-    if has_weight:
-        traits = ROOT.narf.tensor_traits[coltypes[-1]]
-        if traits.is_tensor:
-            tensor_weight = True
-            # weight is a tensor-type, use optimized storage and use or create additional axes
-            # corresponding to tensor indices
-            if tensor_axes is None:
-                tensor_axes = [None]*traits.rank
-
-            for idim, (size, tensor_axis) in enumerate(zip(list(traits.get_sizes()), tensor_axes)):
-                if isinstance(tensor_axis, bh.axis.Axis):
-                    if tensor_axis.size != size:
-                        raise ValueError("Tensor axis must have the same size as the corresponding tensor dimension")
-                    python_axes.append(tensor_axis)
-                elif isinstance(tensor_axis, str):
-                    python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = tensor_axis))
-                elif tensor_axis is None:
-                    python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = f"tensor_axis_{idim}"))
-                else:
-                    raise TypeError("Invalid type provided for tensor axis")
-
     if tensor_weight:
+        # weight is a tensor-type, use optimized storage and use or create additional axes
+        # corresponding to tensor indices
+        if tensor_axes is None:
+            tensor_axes = [None]*len(tensor_shape)
+
+        for idim, (size, tensor_axis) in enumerate(zip(tensor_shape, tensor_axes)):
+            if isinstance(tensor_axis, bh.axis.Axis):
+                if tensor_axis.size != size:
+                    raise ValueError("Tensor axis must have the same size as the corresponding tensor dimension")
+                python_axes.append(tensor_axis)
+            elif isinstance(tensor_axis, str):
+                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = tensor_axis))
+            elif tensor_axis is None:
+                python_axes.append(hist.axis.Integer(0, size, underflow=False, overflow=False, name = f"tensor_axis_{idim}"))
+            else:
+                raise TypeError("Invalid type provided for tensor axis")
+
         # weight is a tensor type, using tensor-storage directly
-        tensor_type = traits.tensor_type
+        dimensions = ROOT.Eigen.Sizes[*tensor_shape]
 
         if isinstance(storage, bh.storage.Double):
-            cppstoragetype = ROOT.narf.tensor_accumulator[tensor_type.Scalar, tensor_type.Dimensions]
+            cppstoragetype = ROOT.narf.tensor_accumulator[tensor_scalar_type, dimensions]
         elif isinstance(storage, bh.storage.Weight):
-            cppstoragetype = ROOT.narf.tensor_accumulator[ROOT.boost.histogram.accumulators.weighted_sum[tensor_type.Scalar], tensor_type.Dimensions]
+            cppstoragetype = ROOT.narf.tensor_accumulator[ROOT.boost.histogram.accumulators.weighted_sum[tensor_scalar_type], dimensions]
         else:
             raise TypeError("Requested storage type is not supported with tensor weights currently")
 
         if force_atomic:
             cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
+
     else:
         cppstoragetype = convert_storage_type(type(storage), force_atomic = force_atomic)
 
     cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
-
-
 
     #print("storage type: ", cppstoragetype.__cpp_name__)
     hfill = ROOT.narf.make_histogram_dense[cppstoragetype](*cppaxes)
