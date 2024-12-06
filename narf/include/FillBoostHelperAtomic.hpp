@@ -22,6 +22,59 @@ namespace narf {
    template <typename... Axes>
    struct is_static<std::tuple<Axes...>> : std::true_type {};
 
+   template <class T, T Offset, T... Idxs>
+   auto integer_sequence_offset_impl(std::integral_constant<T, Offset>, std::integer_sequence<T, Idxs...>) {
+      return std::integer_sequence<T, Idxs + Offset...>{};
+   }
+
+   template<class T, T Start, T Stop>
+   using make_integer_sequence_offset = decltype(integer_sequence_offset_impl(std::integral_constant<T, Start>{}, std::make_integer_sequence<T, Stop-Start>{}));
+
+   template <std::size_t Start, std::size_t Stop>
+   using make_index_sequence_offset = make_integer_sequence_offset<std::size_t, Start, Stop>;
+
+   template<typename T, typename U>
+   auto product(const T &x, const U &y) {
+     return x*y;
+   }
+
+   template<typename T>
+   T scalar_tensor_product_helper_impl2(const T &x, const T &y) {
+      return x*y;
+   }
+
+   template<typename T, int Options_, typename IndexType, std::ptrdiff_t... Indices>
+   Eigen::TensorFixedSize<T, Eigen::Sizes<Indices...>, Options_, IndexType> scalar_tensor_product_helper_impl2(const T &x, const Eigen::TensorFixedSize<T, Eigen::Sizes<Indices...>, Options_, IndexType> &y) {
+      return x*y;
+   }
+
+   template<typename T, int Options_, typename IndexType, std::ptrdiff_t... Indices>
+   Eigen::TensorFixedSize<T, Eigen::Sizes<Indices...>, Options_, IndexType> scalar_tensor_product_helper_impl2(const Eigen::TensorFixedSize<T, Eigen::Sizes<Indices...>, Options_, IndexType> &x, const T &y) {
+      return x*y;
+   }
+
+   template<typename First, typename Second, typename... Others>
+   auto const scalar_tensor_product_helper_impl(const First &first, const Second &second, const Others&... others) {
+      auto const res = scalar_tensor_product_helper_impl2(first, second);
+      if constexpr (sizeof...(others) == 0) {
+         return res;
+      }
+      else {
+         return scalar_tensor_product_helper_impl(res, others...);
+      }
+   }
+
+   // use decltype(auto) to return as reference where possible (this is the case when there is only one weight)
+   template<typename First, typename... Others>
+   decltype(auto) scalar_tensor_product_helper(const First &first, const Others&... others) {
+      if constexpr (sizeof...(others) == 0) {
+         return first;
+      }
+      else {
+         return scalar_tensor_product_helper_impl(first, others...);
+      }
+   }
+
    template <typename HIST, typename HISTFILL = HIST>
    class FillBoostHelperAtomic : public ROOT::Detail::RDF::RActionImpl<FillBoostHelperAtomic<HIST, HISTFILL>> {
       std::shared_ptr<HIST> fObject;
@@ -74,83 +127,42 @@ namespace narf {
    #endif
       }
 
-      template <typename A, typename T, T... Idxs>
-      void FillHist(const A &tup, std::integer_sequence<T, Idxs...>) {
+      template <typename A, typename T, T... Idxs, T... WeightIdxs>
+      void FillHist(const A &tup, std::integer_sequence<T, Idxs...>, std::integer_sequence<T, WeightIdxs...>) {
          using namespace boost::histogram;
-         auto &thisSlotH = *fFillObject;
-
-         constexpr auto N = std::tuple_size<A>::value;
-
-//          std::cout << "filling from scalar" << std::endl;
-
-         // handle filling both with and without weight, with compile time
-         // checking where possible
-         if constexpr (is_static<typename HISTFILL::axes_type>::value) {
-            constexpr auto rank = std::tuple_size<typename HISTFILL::axes_type>::value;
-            constexpr bool weighted = N != rank;
-            if constexpr (weighted) {
-               thisSlotH(std::get<Idxs>(tup)..., weight(std::get<N-1>(tup)));
-            }
-            else {
-               thisSlotH(std::get<Idxs>(tup)..., std::get<N-1>(tup));
-            }
-         }
-         else {
-            const auto rank = fFillObject->rank();
-            const bool weighted = N != rank;
-            if (weighted) {
-               thisSlotH(std::get<Idxs>(tup)..., weight(std::get<N-1>(tup)));
-            }
-            else {
-               thisSlotH(std::get<Idxs>(tup)..., std::get<N-1>(tup));
-            }
-         }
-
-//          std::cout << "hist sum in FillHist: " << algorithm::sum(thisSlotH).value() << std::endl;
-
+         // weird type issues if argument to weight is an rval, so store the temporary here
+         // FIXME understand and fix this
+         auto const wgtval = scalar_tensor_product_helper(std::get<WeightIdxs>(tup)...);
+         (*fFillObject)(std::get<Idxs>(tup)..., weight(wgtval));
       }
 
-      template <typename A, typename T, T... Idxs>
-      void FillHistIt(const A &tup, std::integer_sequence<T, Idxs...>) {
+      template <typename A, typename T, T... Idxs, T... WeightIdxs>
+      void FillHistIt(const A &tup, std::integer_sequence<T, Idxs...>, std::integer_sequence<T, WeightIdxs...>) {
          using namespace boost::histogram;
-         auto &thisSlotH = *fFillObject;
-
-         constexpr auto N = std::tuple_size<A>::value;
-
-//          std::cout << "filling from vector" << std::endl;
-
-         // handle filling both with and without weight, with compile time
-         // checking where possible
-         if constexpr (is_static<typename HISTFILL::axes_type>::value) {
-            constexpr auto rank = std::tuple_size<typename HISTFILL::axes_type>::value;
-            constexpr bool weighted = N != rank;
-            if constexpr (weighted) {
-               thisSlotH(*std::get<Idxs>(tup)..., weight(*std::get<N-1>(tup)));
-            }
-            else {
-               thisSlotH(*std::get<Idxs>(tup)..., *std::get<N-1>(tup));
-            }
-         }
-         else {
-            const auto rank = fFillObject->rank();
-            const bool weighted = N != rank;
-            if (weighted) {
-               thisSlotH(*std::get<Idxs>(tup)..., weight(*std::get<N-1>(tup)));
-            }
-            else {
-               thisSlotH(*std::get<Idxs>(tup)..., *std::get<N-1>(tup));
-            }
-         }
+         // weird type issues if argument to weight is an rval, so store the temporary here
+         // FIXME understand and fix this
+         auto const wgtval = scalar_tensor_product_helper(*std::get<WeightIdxs>(tup)...);
+         (*fFillObject)(*std::get<Idxs>(tup)..., weight(wgtval));
       }
 
       template <std::size_t ColIdx, typename End_t, typename... Its>
       void ExecLoop(unsigned int slot, End_t end, Its... its)
       {
+         constexpr auto N = sizeof...(its);
+         constexpr auto rank = std::tuple_size<typename HISTFILL::axes_type>::value;
+
          // loop increments all of the iterators while leaving scalars unmodified
          // TODO this could be simplified with fold expressions or std::apply in C++17
          auto nop = [](auto &&...) {};
          for (auto itst = std::forward_as_tuple(its...); std::get<ColIdx>(itst) != end; nop(++its...)) {
-            FillHistIt(itst, std::make_index_sequence<sizeof...(its)-1>{});
+            if constexpr (N > rank) {
+               // fill with weight
+               FillHistIt(itst, std::make_index_sequence<rank>{}, make_index_sequence_offset<rank, N>{});
+            }
+            else {
+               // fill without weight
+               (*fFillObject)(*its...);
+            }
          }
       }
 
@@ -201,14 +213,18 @@ namespace narf {
       template <typename... ValTypes,
                typename std::enable_if<!std::disjunction<IsDataContainer<ValTypes>...>::value, int>::type = 0>
       void Exec(unsigned int slot, const ValTypes &...x) {
-         using namespace boost::histogram;
-         constexpr unsigned int N = sizeof...(x);
+         constexpr auto N = sizeof...(x);
+         constexpr auto rank = std::tuple_size<typename HISTFILL::axes_type>::value;
 
-         const auto xst = std::forward_as_tuple(x...);
-
-         FillHist(xst, std::make_index_sequence<N-1>{});
-
-//          std::cout << "hist sum in Exec: " << algorithm::sum(*fObject).value() << std::endl;
+         if constexpr (N > rank) {
+            // fill with weight
+            const auto xst = std::forward_as_tuple(x...);
+            FillHist(xst, std::make_index_sequence<rank>{}, make_index_sequence_offset<rank, N>{});
+         }
+         else {
+            // fill without weight
+            (*fFillObject)(x...);
+         }
 
       }
 
