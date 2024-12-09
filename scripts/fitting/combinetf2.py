@@ -179,6 +179,10 @@ results.update({
 
 if args.doImpacts:
 
+    h_pulls, h_constrains = fitter.pulls_and_constraints(cov)
+    results["pulls"] = h_pulls
+    results["constraints"] = h_constrains
+
     if args.globalImpacts:
 
         h, h_grouped = fitter.global_impacts(cov)

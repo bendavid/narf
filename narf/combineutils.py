@@ -422,6 +422,24 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
+    def pulls_and_constraints(self, cov):
+        systs = list(self.indata.systs.astype(str))
+        axis_systs = hist.axis.StrCategory(systs, name="systs")
+
+        pulls = self.x - self.theta0
+
+        h_pulls = hist.Hist(axis_systs, storage=hist.storage.Double(), name="pulls")
+        h_pulls.values()[...] = memoryview(pulls)
+        h_pulls = narf.ioutils.H5PickleProxy(h_pulls)
+
+        constraints = tf.sqrt(tf.linalg.diag_part(cov))
+
+        h_constraints = hist.Hist(axis_systs, storage=hist.storage.Double(), name="constraints")
+        h_constraints.values()[...] = memoryview(constraints)
+        h_constraints = narf.ioutils.H5PickleProxy(h_constraints)
+
+        return h_pulls, h_constraints
+
     def _global_impacts(self, cov):
         with tf.GradientTape() as t2:
             t2.watch([self.theta0, self.nobs, self.beta0])
@@ -460,7 +478,6 @@ class Fitter:
             fn_output_signature=tf.TensorSpec(shape=(dxdtheta0.shape[0]), dtype=tf.float64)
         )
 
-        # global stat uncertainty
         data_stat = tf.sqrt(tf.reduce_sum(tf.square(dxdnobs) * self.nobs, axis=-1))
         impact_names.append("stat")
         impact_names_grouped.append("stat")
