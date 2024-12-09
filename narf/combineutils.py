@@ -422,6 +422,24 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
+    def pulls_and_constraints(self, cov):
+        systs = list(self.indata.systs.astype(str))
+        axis_systs = hist.axis.StrCategory(systs, name="systs")
+
+        pulls = self.x - self.theta0
+
+        h_pulls = hist.Hist(axis_systs, storage=hist.storage.Double(), name="pulls")
+        h_pulls.values()[...] = memoryview(pulls)
+        h_pulls = narf.ioutils.H5PickleProxy(h_pulls)
+
+        constraints = tf.sqrt(tf.linalg.diag_part(cov))
+
+        h_constraints = hist.Hist(axis_systs, storage=hist.storage.Double(), name="constraints")
+        h_constraints.values()[...] = memoryview(constraints)
+        h_constraints = narf.ioutils.H5PickleProxy(h_constraints)
+
+        return h_pulls, h_constraints
+
     def _global_impacts(self, cov):
         with tf.GradientTape() as t2:
             t2.watch([self.theta0, self.nobs, self.beta0])
@@ -436,6 +454,60 @@ class Fitter:
         dxdbeta0 = -cov @ pd2ldxdbeta0
 
         return dxdtheta0, dxdnobs, dxdbeta0
+
+    def global_impacts(self, cov):
+        dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
+
+        systs = list(self.indata.systs.astype(str))
+        impact_names = systs[:]
+        impact_names_grouped = list(self.indata.systgroups.astype(str))
+
+        # group grobal impacts
+        systgroupidxs = tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32)
+
+        @tf.function
+        def compute_impact(idxs):
+            gathered = tf.gather(dxdtheta0, idxs, axis=-1)
+            squared = tf.square(gathered)
+            summed = tf.reduce_sum(squared, axis=-1)
+            return tf.sqrt(summed)
+
+        impacts_grouped = tf.map_fn(
+            compute_impact,
+            systgroupidxs, 
+            fn_output_signature=tf.TensorSpec(shape=(dxdtheta0.shape[0]), dtype=tf.float64)
+        )
+
+        data_stat = tf.sqrt(tf.reduce_sum(tf.square(dxdnobs) * self.nobs, axis=-1))
+        impact_names.append("stat")
+        impact_names_grouped.append("stat")
+        impacts_data_stat = tf.reshape(data_stat, (1, -1))
+        impacts = tf.concat([dxdtheta0, impacts_data_stat], axis=0)
+        impacts_grouped = tf.concat([impacts_grouped, impacts_data_stat], axis=0)
+
+        if self.binByBinStat:
+            # global MC stat uncertainty
+            mc_stat = tf.sqrt(tf.reduce_sum(tf.square(dxdbeta0) * tf.math.reciprocal(self.indata.kstat), axis=-1))
+            impact_names.append("binByBinStat")
+            impact_names_grouped.append("binByBinStat")
+            impacts_mc_stat = tf.reshape(mc_stat, (1, -1))
+            impacts = tf.concat([impacts, impacts_mc_stat], axis=0)
+            impacts_grouped = tf.concat([impacts_grouped, impacts_mc_stat], axis=0)
+
+        # write out histograms
+        axis_systs = hist.axis.StrCategory(systs, name="systs")
+        axis_impacts = hist.axis.StrCategory(impact_names, name="inpacts")
+        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="inpacts")
+
+        h = hist.Hist(axis_impacts, axis_systs, storage=hist.storage.Double(), name="global_impacts")
+        h.values()[...] = memoryview(impacts)
+        h = narf.ioutils.H5PickleProxy(h)
+
+        h_grouped = hist.Hist(axis_impacts_grouped, axis_systs, storage=hist.storage.Double(), name="global_impacts_grouped")
+        h_grouped.values()[...] = memoryview(impacts_grouped)
+        h_grouped = narf.ioutils.H5PickleProxy(h)
+
+        return h, h_grouped
 
     def _expvar_profiled(self, fun_exp, cov, compute_cov=False):
         dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
