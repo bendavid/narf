@@ -179,13 +179,17 @@ results.update({
 
 if args.doImpacts:
 
-    h_pulls, h_constrains = fitter.pulls_and_constraints(cov)
+    h_pulls, h_constraints = fitter.pulls_and_constraints(cov)
     results["pulls"] = h_pulls
-    results["constraints"] = h_constrains
+    results["constraints"] = h_constraints
+
+    h, h_grouped = fitter.impacts_systs(cov, hess)
+    results["impacts"] = h
+    results["impacts_grouped"] = h_grouped
 
     if args.globalImpacts:
 
-        h, h_grouped = fitter.global_impacts(cov)
+        h, h_grouped = fitter.global_impacts_systs(cov)
 
         results["global_impacts"] = h
         results["global_impacts_grouped"] = h_grouped
