@@ -27,6 +27,8 @@ parser.add_argument("--externalPostfit", default=None, help="load posfit nuisanc
 parser.add_argument("--pseudoData", default=None, type=str, help="run fit on pseudo data with the given name")
 parser.add_argument("--normalize", default=False, action='store_true', help="Normalize prediction and systematic uncertainties to the overall event yield in data")
 parser.add_argument("--project", nargs="+", action="append", default=[], help="add projection for the prefit and postfit histograms, specifying the channel name followed by the axis names, e.g. \"--project ch0 eta pt\".  This argument can be called multiple times")
+parser.add_argument("--chisqFit", default=False, action='store_true',  help="Perform chi-square fit instead of likelihood fit")
+parser.add_argument("--externalCovariance", default=False, action='store_true',  help="Using an external covariance matrix for the observations in the chi-square fit")
 
 args = parser.parse_args()
 
