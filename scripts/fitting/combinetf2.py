@@ -27,6 +27,10 @@ parser.add_argument("--externalPostfit", default=None, help="load posfit nuisanc
 parser.add_argument("--pseudoData", default=None, type=str, help="run fit on pseudo data with the given name")
 parser.add_argument("--normalize", default=False, action='store_true', help="Normalize prediction and systematic uncertainties to the overall event yield in data")
 parser.add_argument("--project", nargs="+", action="append", default=[], help="add projection for the prefit and postfit histograms, specifying the channel name followed by the axis names, e.g. \"--project ch0 eta pt\".  This argument can be called multiple times")
+parser.add_argument("--doImpacts", default=False, action='store_true', help="Compute impacts on POIs per nuisance parameter and per-nuisance parameter group")
+parser.add_argument("--globalImpacts", default = False, action='store_true', help="compute impacts in terms of variations of global observables (as opposed to nuisance parameters directly)")
+parser.add_argument("--chisqFit", default=False, action='store_true',  help="Perform chi-square fit instead of likelihood fit")
+parser.add_argument("--externalCovariance", default=False, action='store_true',  help="Using an external covariance matrix for the observations in the chi-square fit")
 
 args = parser.parse_args()
 
@@ -174,6 +178,23 @@ results.update({
     "ndfsat" : ndfsat,
     "postfit_profile" : postfit_profile,
 })
+
+if args.doImpacts:
+
+    h_pulls, h_constraints = fitter.pulls_and_constraints(cov)
+    results["pulls"] = h_pulls
+    results["constraints"] = h_constraints
+
+    h, h_grouped = fitter.impacts_systs(cov, hess)
+    results["impacts"] = h
+    results["impacts_grouped"] = h_grouped
+
+    if args.globalImpacts:
+
+        h, h_grouped = fitter.global_impacts_systs(cov)
+
+        results["global_impacts"] = h
+        results["global_impacts_grouped"] = h_grouped
 
 if args.saveHists:
 

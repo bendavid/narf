@@ -89,6 +89,12 @@ class FitInputData:
             hconstraintweights = f['hconstraintweights']
             hdata_obs = f['hdata_obs']
 
+            if 'hdata_cov' in f.keys():
+                hdata_cov = f['hdata_cov']
+                self.data_cov = maketensor(hdata_cov)
+            else:
+                self.data_cov = None
+
             self.sparse = not 'hnorm' in f
 
             if self.sparse:
@@ -350,6 +356,14 @@ class Fitter:
         if self.binByBinStat:
             self.systgroupsfull.append("binByBinStat")
 
+        if options.externalCovariance and not options.chisqFit:
+            raise Exception('option "--externalCovariance" only works with "--chisqFit"')
+        if (options.chisqFit or options.externalCovariance) and options.binByBinStat:
+            raise Exception('option "--binByBinStat" currently not supported for options "--externalCovariance" and "--chisqFit"')
+
+        self.chisqFit = options.chisqFit
+        self.externalCovariance = options.externalCovariance
+
         self.nsystgroupsfull = len(self.systgroupsfull)
 
         self.pois = []
@@ -385,6 +399,18 @@ class Fitter:
 
         # observed number of events per bin
         self.nobs = tf.Variable(self.indata.data_obs, trainable=False, name="nobs")
+
+        if self.chisqFit:
+            if self.externalCovariance:
+                if self.indata.data_cov is None:
+                    raise RuntimeError("No external covariance found in input data.")
+                # provided covariance
+                self.data_cov = self.indata.data_cov
+            else:
+                # covariance from data stat
+                if any(self.nobs<=0):
+                    raise RuntimeError("Bins in 'nobs <= 0' encountered, chi^2 fit can not be performed.")
+                self.data_cov = tf.diag(self.nobs)
 
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
@@ -422,6 +448,102 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
+    def pulls_and_constraints(self, cov):
+        systs = list(self.indata.systs.astype(str))
+        axis_systs = hist.axis.StrCategory(systs, name="systs")
+
+        pulls = self.x - self.theta0
+
+        h_pulls = hist.Hist(axis_systs, storage=hist.storage.Double(), name="pulls")
+        h_pulls.values()[...] = memoryview(pulls)
+        h_pulls = narf.ioutils.H5PickleProxy(h_pulls)
+
+        constraints = tf.sqrt(tf.linalg.diag_part(cov))
+
+        h_constraints = hist.Hist(axis_systs, storage=hist.storage.Double(), name="constraints")
+        h_constraints.values()[...] = memoryview(constraints)
+        h_constraints = narf.ioutils.H5PickleProxy(h_constraints)
+
+        return h_pulls, h_constraints
+
+    @tf.function(reduce_retracing=True)
+    def _compute_impact_group(self, cov, nstat, idxs):
+        cov_reduced = tf.gather(cov, idxs, axis=0)
+        cov_reduced = tf.gather(cov_reduced, idxs, axis=1)
+        v = tf.gather(cov[:nstat,:], idxs, axis=1)
+        invC_v = tf.linalg.solve(cov_reduced, tf.transpose(v)) 
+        v_invC_v = tf.reduce_sum(v * tf.transpose(invC_v), axis=1)
+        return tf.reshape(tf.sqrt(v_invC_v), (1,-1))
+
+    @tf.function
+    def _impacts_systs(self, nstat, cov, hess):
+
+        impacts = cov[:nstat,:]
+
+        impacts_grouped = tf.concat([
+            self._compute_impact_group(cov, nstat, idxs)
+            for idxs in self.indata.systgroupidxs
+        ], axis=1)
+
+        # impact data stat
+        hess_stat = hess[:nstat,:nstat]
+        identity = tf.eye(nstat, dtype=hess_stat.dtype)
+        inv_hess_stat = tf.linalg.solve(hess_stat, identity)  # Solves H * X = I
+        impacts_data_stat = tf.sqrt(tf.linalg.diag_part(inv_hess_stat))
+        impacts_data_stat = tf.reshape(impacts_data_stat, (1, -1))
+
+        impacts = tf.concat([impacts, impacts_data_stat], axis=1)
+        impacts_grouped = tf.concat([impacts_grouped, impacts_data_stat], axis=1)
+
+        if self.binByBinStat:
+            # impact bin-by-bin stat
+            val_no_bbb, grad_no_bbb, hess_no_bbb = self.loss_val_grad_hess(profile_grad=False)
+
+            hess_stat_no_bbb = hess_no_bbb[:nstat,:nstat]
+            inv_hess_stat_no_bbb = tf.linalg.solve(hess_stat_no_bbb, identity)
+            impacts_bbb_sq = tf.linalg.diag_part(inv_hess_stat - inv_hess_stat_no_bbb)
+            impacts_bbb = tf.sqrt(tf.maximum(tf.zeros_like(impacts_bbb_sq), impacts_bbb_sq))
+            impacts_bbb = tf.reshape(impacts_bbb, (1, -1))
+
+            impacts = tf.concat([impacts, impacts_bbb], axis=1)
+            impacts_grouped = tf.concat([impacts_grouped, impacts_bbb], axis=1)
+
+        return impacts, impacts_grouped
+
+    def impacts_systs(self, cov, hess):
+
+        # store impacts for all POIs and unconstrained nuisances
+        nstat = self.npoi + self.indata.nsystnoconstraint
+
+        systs = list(self.indata.systs.astype(str))[:nstat]
+
+        impact_names = list(self.indata.systs.astype(str))
+        impact_names_grouped = list(self.indata.systgroups.astype(str))
+
+        impacts, impacts_grouped = self._impacts_systs(nstat, cov, hess)
+
+        impact_names.append("stat")
+        impact_names_grouped.append("stat")
+
+        if self.binByBinStat:
+            impact_names.append("binByBinStat")
+            impact_names_grouped.append("binByBinStat")
+
+        # write out histograms
+        axis_systs = hist.axis.StrCategory(systs, name="systs")
+        axis_impacts = hist.axis.StrCategory(impact_names, name="inpacts")
+        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="inpacts")
+
+        h = hist.Hist(axis_systs, axis_impacts, storage=hist.storage.Double(), name="impacts")
+        h.values()[...] = memoryview(impacts)
+        h = narf.ioutils.H5PickleProxy(h)
+
+        h_grouped = hist.Hist(axis_systs, axis_impacts_grouped, storage=hist.storage.Double(), name="impacts_grouped")
+        h_grouped.values()[...] = memoryview(impacts_grouped)
+        h_grouped = narf.ioutils.H5PickleProxy(h)
+
+        return h, h_grouped
+
     def _global_impacts(self, cov):
         with tf.GradientTape() as t2:
             t2.watch([self.theta0, self.nobs, self.beta0])
@@ -436,6 +558,77 @@ class Fitter:
         dxdbeta0 = -cov @ pd2ldxdbeta0
 
         return dxdtheta0, dxdnobs, dxdbeta0
+
+    @tf.function(reduce_retracing=True)
+    def _compute_global_impact_group(self, dxdtheta0, idxs):
+        gathered = tf.gather(dxdtheta0, idxs, axis=-1)
+        squared = tf.square(gathered)
+        summed = tf.reduce_sum(squared, axis=-1)
+        return tf.reshape(tf.sqrt(summed), (1,-1))
+
+    @tf.function
+    def _global_impacts_systs(self, cov):
+
+        dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
+        
+        impacts_grouped = tf.concat([
+            self._compute_global_impact_group(dxdtheta0, idxs)
+            for idxs in self.indata.systgroupidxs
+        ], axis=1)
+
+        # global impact data stat
+        if self.externalCovariance:
+            data_stat = dxdnobs @ tf.matmul(self.data_cov, dxdnobs, transpose_b = True)
+            data_stat = tf.sqrt(data_stat)
+        else:
+            data_stat = tf.sqrt(tf.reduce_sum(tf.square(dxdnobs) * self.nobs, axis=-1))
+        impacts_data_stat = tf.reshape(data_stat, (1, -1))
+        impacts = tf.concat([dxdtheta0, impacts_data_stat], axis=1)
+        impacts_grouped = tf.concat([impacts_grouped, impacts_data_stat], axis=1)
+
+        if self.binByBinStat:
+            # global impact bin-by-bin stat
+            impacts_bbb = tf.sqrt(tf.reduce_sum(tf.square(dxdbeta0) * tf.math.reciprocal(self.indata.kstat), axis=-1))
+            impacts_bbb = tf.reshape(impacts_bbb, (1, -1))
+            impacts = tf.concat([impacts, impacts_bbb], axis=1)
+            impacts_grouped = tf.concat([impacts_grouped, impacts_bbb], axis=1)
+
+        return impacts, impacts_grouped
+
+    def global_impacts_systs(self, cov):
+        # store impacts for all POIs and unconstrained nuisances
+        nstat = self.npoi + self.indata.nsystnoconstraint
+
+        systs = list(self.indata.systs.astype(str))[:nstat]
+
+        impacts, impacts_grouped = self._global_impacts_systs(cov[:nstat,:])
+
+        impact_names = list(self.indata.systs.astype(str))
+        impact_names_grouped = list(self.indata.systgroups.astype(str))
+
+        # global impact data stat
+        impact_names.append("stat")
+        impact_names_grouped.append("stat")
+
+        if self.binByBinStat:
+            # global impact bin-by-bin stat
+            impact_names.append("binByBinStat")
+            impact_names_grouped.append("binByBinStat")
+
+        # write out histograms
+        axis_systs = hist.axis.StrCategory(systs, name="systs")
+        axis_impacts = hist.axis.StrCategory(impact_names, name="inpacts")
+        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="inpacts")
+
+        h = hist.Hist(axis_systs, axis_impacts, storage=hist.storage.Double(), name="global_impacts")
+        h.values()[...] = memoryview(impacts)
+        h = narf.ioutils.H5PickleProxy(h)
+
+        h_grouped = hist.Hist(axis_systs, axis_impacts_grouped, storage=hist.storage.Double(), name="global_impacts_grouped")
+        h_grouped.values()[...] = memoryview(impacts_grouped)
+        h_grouped = narf.ioutils.H5PickleProxy(h)
+
+        return h, h_grouped
 
     def _expvar_profiled(self, fun_exp, cov, compute_cov=False):
         dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
@@ -886,28 +1079,34 @@ class Fitter:
         l, lfull = self._compute_nll()
         return lfull
 
-    def _compute_nll(self):
+    def _compute_nll(self, profile=True, profile_grad=True):
         theta = self.x[self.npoi:]
 
-        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta()
+        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad)
 
         nexp = nexpfullcentral
 
-        nobsnull = tf.equal(self.nobs,tf.zeros_like(self.nobs))
+        if self.chisqFit:
+            residual = tf.reshape(self.nobs - nexp,[-1,1]) #chi2 residual
+            # Solve the system without inverting
+            solved = tf.linalg.solve(self.data_cov, residual)
+            ln = lnfull = 0.5 * tf.reduce_sum(residual * solved)
+        else:
+            nobsnull = tf.equal(self.nobs,tf.zeros_like(self.nobs))
 
-        nexpsafe = tf.where(nobsnull, tf.ones_like(self.nobs), nexp)
-        lognexp = tf.math.log(nexpsafe)
+            nexpsafe = tf.where(nobsnull, tf.ones_like(self.nobs), nexp)
+            lognexp = tf.math.log(nexpsafe)
 
-        nexpnomsafe = tf.where(nobsnull, tf.ones_like(self.nobs), self.nexpnom)
-        lognexpnom = tf.math.log(nexpnomsafe)
+            nexpnomsafe = tf.where(nobsnull, tf.ones_like(self.nobs), self.nexpnom)
+            lognexpnom = tf.math.log(nexpnomsafe)
 
-        #final likelihood computation
+            #final likelihood computation
 
-        #poisson term
-        lnfull = tf.reduce_sum(-self.nobs*lognexp + nexp, axis=-1)
+            #poisson term
+            lnfull = tf.reduce_sum(-self.nobs*lognexp + nexp, axis=-1)
 
-        #poisson term with offset to improve numerical precision
-        ln = tf.reduce_sum(-self.nobs*(lognexp-lognexpnom) + nexp-self.nexpnom, axis=-1)
+            #poisson term with offset to improve numerical precision
+            ln = tf.reduce_sum(-self.nobs*(lognexp-lognexpnom) + nexp-self.nexpnom, axis=-1)
 
         #constraints
         lc = tf.reduce_sum(self.indata.constraintweights*0.5*tf.square(theta - self.theta0))
@@ -926,8 +1125,8 @@ class Fitter:
 
         return l, lfull
 
-    def _compute_loss(self):
-        l, lfull = self._compute_nll()
+    def _compute_loss(self, profile=True, profile_grad=True):
+        l, lfull = self._compute_nll(profile=profile, profile_grad=profile_grad)
         return l
 
     @tf.function
@@ -954,10 +1153,10 @@ class Fitter:
         return val, grad, hessp
 
     @tf.function
-    def loss_val_grad_hess(self):
+    def loss_val_grad_hess(self, profile=True, profile_grad=True):
         with tf.GradientTape() as t2:
             with tf.GradientTape() as t1:
-                val = self._compute_loss()
+                val = self._compute_loss(profile=profile, profile_grad=profile_grad)
             grad = t1.gradient(val, self.x)
         hess = t2.jacobian(grad, self.x)
 
