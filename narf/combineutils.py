@@ -480,8 +480,6 @@ class Fitter:
 
         impacts = cov[:nstat,:]
 
-        systgroupidxs = tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32)
-
         impacts_grouped = tf.concat([
             self._compute_impact_group(cov, nstat, idxs)
             for idxs in self.indata.systgroupidxs
@@ -573,9 +571,6 @@ class Fitter:
 
         dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
         
-        # group grobal impacts
-        systgroupidxs = tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32)
-
         impacts_grouped = tf.concat([
             self._compute_global_impact_group(dxdtheta0, idxs)
             for idxs in self.indata.systgroupidxs
