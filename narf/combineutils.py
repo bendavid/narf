@@ -89,11 +89,11 @@ class FitInputData:
             hconstraintweights = f['hconstraintweights']
             hdata_obs = f['hdata_obs']
 
-            if 'hdata_cov_inv' in f.keys():
-                hdata_cov_inv = f['hdata_cov_inv']
-                self.data_cov_inv = maketensor(hdata_cov_inv)
+            if 'hdata_cov' in f.keys():
+                hdata_cov = f['hdata_cov']
+                self.data_cov = maketensor(hdata_cov)
             else:
-                self.data_cov_inv = None
+                self.data_cov = None
 
             self.sparse = not 'hnorm' in f
 
@@ -402,15 +402,15 @@ class Fitter:
 
         if self.chisqFit:
             if self.externalCovariance:
-                if self.indata.data_cov_inv is None:
+                if self.indata.data_cov is None:
                     raise RuntimeError("No external covariance found in input data.")
                 # provided covariance
-                self.data_cov_inv = self.indata.data_cov_inv
+                self.data_cov = self.indata.data_cov
             else:
                 # covariance from data stat
                 if any(self.nobs<=0):
                     raise RuntimeError("Bins in 'nobs <= 0' encountered, chi^2 fit can not be performed.")
-                self.data_cov_inv = tf.diag(tf.reciprocal(self.nobs))
+                self.data_cov = tf.diag(self.nobs)
 
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
@@ -582,7 +582,11 @@ class Fitter:
         ], axis=1)
 
         # global impact data stat
-        data_stat = tf.sqrt(tf.reduce_sum(tf.square(dxdnobs) * self.nobs, axis=-1))
+        if self.externalCovariance:
+            data_stat = dxdnobs @ tf.matmul(self.data_cov, dxdnobs, transpose_b = True)
+            data_stat = tf.sqrt(data_stat)
+        else:
+            data_stat = tf.sqrt(tf.reduce_sum(tf.square(dxdnobs) * self.nobs, axis=-1))
         impacts_data_stat = tf.reshape(data_stat, (1, -1))
         impacts = tf.concat([dxdtheta0, impacts_data_stat], axis=1)
         impacts_grouped = tf.concat([impacts_grouped, impacts_data_stat], axis=1)
@@ -1088,8 +1092,10 @@ class Fitter:
         nexp = nexpfullcentral
 
         if self.chisqFit:
-            residual = tf.reshape(self.nobs - nexp,[-1,1]) #chi2 residual  
-            ln = lnfull = 0.5 * tf.reduce_sum(tf.matmul(residual, tf.matmul(self.data_cov_inv, residual), transpose_a=True))
+            residual = tf.reshape(self.nobs - nexp,[-1,1]) #chi2 residual
+            # Solve the system without inverting
+            solved = tf.linalg.solve(self.data_cov, residual)
+            ln = lnfull = 0.5 * tf.reduce_sum(residual * solved)
         else:
             nobsnull = tf.equal(self.nobs,tf.zeros_like(self.nobs))
 
