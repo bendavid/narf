@@ -405,7 +405,7 @@ class Fitter:
                 if self.indata.data_cov_inv is None:
                     raise RuntimeError("No external covariance found in input data.")
                 # provided covariance
-                self.data_cov_inv = tf.Variable(self.indata.data_cov_inv, trainable=False, name="data_cov_inv")
+                self.data_cov_inv = self.indata.data_cov_inv
             else:
                 # covariance from data stat
                 if any(self.nobs<=0):
