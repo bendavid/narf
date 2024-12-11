@@ -48,38 +48,9 @@ class FitInputData:
             self.systsnoconstraint = f['hsystsnoconstraint'][...]
             self.systgroups = f['hsystgroups'][...]
             self.systgroupidxs = f['hsystgroupidxs'][...]
-            self.chargegroups = f['hchargegroups'][...]
-            self.chargegroupidxs = f['hchargegroupidxs'][...]
-            self.polgroups = f['hpolgroups'][...]
-            self.polgroupidxs = f['hpolgroupidxs'][...]
-            self.helgroups = f['hhelgroups'][...]
-            self.helgroupidxs = f['hhelgroupidxs'][...]
-            self.sumgroups = f['hsumgroups'][...]
-            self.sumgroupsegmentids = f['hsumgroupsegmentids'][...]
-            self.sumgroupidxs = f['hsumgroupidxs'][...]
-            self.chargemetagroups = f['hchargemetagroups'][...]
-            self.chargemetagroupidxs = f['hchargemetagroupidxs'][...]
-            self.ratiometagroups = f['hratiometagroups'][...]
-            self.ratiometagroupidxs = f['hratiometagroupidxs'][...]
-            self.helmetagroups = f['hhelmetagroups'][...]
-            self.helmetagroupidxs = f['hhelmetagroupidxs'][...]
-            self.reggroups = f['hreggroups'][...]
-            self.reggroupidxs = f['hreggroupidxs'][...]
-            self.poly1dreggroups = f['hpoly1dreggroups'][...]
-            self.poly1dreggroupfirstorder = f['hpoly1dreggroupfirstorder'][...]
-            self.poly1dreggrouplastorder = f['hpoly1dreggrouplastorder'][...]
-            self.poly1dreggroupnames = f['hpoly1dreggroupnames'][...]
-            self.poly1dreggroupbincenters = f['hpoly1dreggroupbincenters'][...]
-            self.poly2dreggroups = f['hpoly2dreggroups'][...]
-            self.poly2dreggroupfirstorder = f['hpoly2dreggroupfirstorder'][...]
-            self.poly2dreggrouplastorder = f['hpoly2dreggrouplastorder'][...]
-            self.poly2dreggroupfullorder = f['hpoly2dreggroupfullorder'][...]
-            self.poly2dreggroupnames = f['hpoly2dreggroupnames'][...]
-            self.poly2dreggroupbincenters0 = f['hpoly2dreggroupbincenters0'][...]
-            self.poly2dreggroupbincenters1 = f['hpoly2dreggroupbincenters1'][...]
+
             self.noigroups = f['hnoigroups'][...]
             self.noigroupidxs = f['hnoigroupidxs'][...]
-            self.maskedchans = f['hmaskedchans'][...]
             if "hpseudodatanames" in f.keys():
                 self.pseudodatanames = f['hpseudodatanames'][...].astype(str)
             else:
@@ -100,32 +71,19 @@ class FitInputData:
             if self.sparse:
                 hnorm_sparse = f['hnorm_sparse']
                 hlogk_sparse = f['hlogk_sparse']
-                self.nbinsfull = hnorm_sparse.attrs['dense_shape'][0]
             else:
                 hnorm = f['hnorm']
                 hlogk = f['hlogk']
-                self.nbinsfull = hnorm.attrs['original_shape'][0]
 
             #infer some metadata from loaded information
             self.dtype = hdata_obs.dtype
             self.nbins = hdata_obs.shape[-1]
-            self.nbinsmasked = self.nbinsfull - self.nbins
             self.nproc = len(self.procs)
             self.nsyst = len(self.systs)
             self.nsystnoprofile = len(self.systsnoprofile)
             self.nsystnoconstraint = len(self.systsnoconstraint)
             self.nsignals = len(self.signals)
             self.nsystgroups = len(self.systgroups)
-            self.nchargegroups = len(self.chargegroups)
-            self.npolgroups = len(self.polgroups)
-            self.nhelgroups = len(self.helgroups)
-            self.nsumgroups = len(self.sumgroups)
-            self.nchargemetagroups = len(self.chargemetagroups)
-            self.nratiometagroups = len(self.ratiometagroups)
-            self.nhelmetagroups = len(self.helmetagroups)
-            self.nreggroups = len(self.reggroups)
-            self.npoly1dreggroups = len(self.poly1dreggroups)
-            self.npoly2dreggroups = len(self.poly2dreggroups)
             self.nnoigroups = len(self.noigroups)
 
             # reference meta data if available
@@ -138,8 +96,6 @@ class FitInputData:
                 self.channel_info = {
                     "ch0":{"axes": [hist.axis.Integer(0, self.nbins, underflow=False, overflow=False, name="obs")]}
                 }
-                if self.nbinsmasked > 0:
-                    self.channel_info["ch1_masked"] = {"axes": [hist.axis.Integer(0, self.nbinsmasked, underflow=False, overflow=False, name="masked")]}
 
             # compute indices for channels
             ibin = 0
@@ -813,9 +769,9 @@ class Fitter:
             #logktheta = theta*logk
             #logsnorm = tf.reduce_sum(logktheta, axis=0)
 
-            mlogk = tf.reshape(self.indata.logk,[self.indata.nbinsfull*self.indata.nproc,2*self.indata.nsyst])
+            mlogk = tf.reshape(self.indata.logk,[self.indata.nbins*self.indata.nproc,2*self.indata.nsyst])
             logsnorm = tf.matmul(mlogk,mthetaalpha)
-            logsnorm = tf.reshape(logsnorm,[self.indata.nbinsfull,self.indata.nproc])
+            logsnorm = tf.reshape(logsnorm,[self.indata.nbins,self.indata.nproc])
 
             snorm = tf.exp(logsnorm)
 
@@ -829,10 +785,6 @@ class Fitter:
             snormnorm = snorm*self.indata.norm
             nexpfullcentral = tf.matmul(snormnorm, mrnorm)
             nexpfullcentral = tf.squeeze(nexpfullcentral,-1)
-
-            snormnormmasked = snormnorm[self.indata.nbins:]
-
-            normmasked = self.indata.norm[self.indata.nbins:]
 
             # if options.saveHists:
             normfullcentral = ernorm*snormnorm
@@ -908,33 +860,31 @@ class Fitter:
         hists = {}
 
         for channel, info in self.indata.channel_info.items():
-            if "masked" not in channel:
+            axes = info["axes"]
 
-                axes = info["axes"]
+            start = info["start"]
+            stop = info["stop"]
 
-                start = info["start"]
-                stop = info["stop"]
+            hist_axes = axes.copy()
 
-                hist_axes = axes.copy()
+            if not inclusive:
+                hist_axes.append(self.indata.axis_procs)
 
-                if not inclusive:
-                    hist_axes.append(self.indata.axis_procs)
+            if compute_variations:
+                axis_vars = hist.axis.StrCategory(self.parms, name="vars")
+                axis_downUpVar = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar")
 
-                if compute_variations:
-                    axis_vars = hist.axis.StrCategory(self.parms, name="vars")
-                    axis_downUpVar = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar")
+                hist_axes.extend([axis_vars, axis_downUpVar])
 
-                    hist_axes.extend([axis_vars, axis_downUpVar])
+            shape = tuple([len(a) for a in hist_axes])
 
-                shape = tuple([len(a) for a in hist_axes])
-
-                h = hist.Hist(*hist_axes, storage=hist.storage.Weight(), name=f"name_{channel}", label=label)
-                h.values()[...] = memoryview(tf.reshape(exp[start:stop], shape))
-                if compute_variance:
-                    h.variances()[...] = memoryview(tf.reshape(var[start:stop], shape))
-                else:
-                    h.variances()[...] = 0.
-                hists[channel] = narf.ioutils.H5PickleProxy(h)
+            h = hist.Hist(*hist_axes, storage=hist.storage.Weight(), name=f"name_{channel}", label=label)
+            h.values()[...] = memoryview(tf.reshape(exp[start:stop], shape))
+            if compute_variance:
+                h.variances()[...] = memoryview(tf.reshape(var[start:stop], shape))
+            else:
+                h.variances()[...] = 0.
+            hists[channel] = narf.ioutils.H5PickleProxy(h)
 
         if compute_chi2:
             def fun_residual():
@@ -1039,24 +989,22 @@ class Fitter:
         hists_nobs = {}
 
         for channel, info in self.indata.channel_info.items():
-            if "masked" not in channel:
+            axes = info["axes"]
 
-                axes = info["axes"]
+            start = info["start"]
+            stop = info["stop"]
 
-                start = info["start"]
-                stop = info["stop"]
+            shape = tuple([len(a) for a in axes])
 
-                shape = tuple([len(a) for a in axes])
+            hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
+            hist_data_obs.values()[...] = memoryview(tf.reshape(self.indata.data_obs[start:stop], shape))
+            hist_data_obs.variances()[...] = hist_data_obs.values()
+            hists_data_obs[channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
 
-                hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
-                hist_data_obs.values()[...] = memoryview(tf.reshape(self.indata.data_obs[start:stop], shape))
-                hist_data_obs.variances()[...] = hist_data_obs.values()
-                hists_data_obs[channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
-
-                hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
-                hist_nobs.values()[...] = memoryview(tf.reshape(self.nobs.value()[start:stop], shape))
-                hist_nobs.variances()[...] = hist_nobs.values()
-                hists_nobs[channel] = narf.ioutils.H5PickleProxy(hist_nobs)
+            hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
+            hist_nobs.values()[...] = memoryview(tf.reshape(self.nobs.value()[start:stop], shape))
+            hist_nobs.variances()[...] = hist_nobs.values()
+            hists_nobs[channel] = narf.ioutils.H5PickleProxy(hist_nobs)
 
         return hists_data_obs, hists_nobs
 
