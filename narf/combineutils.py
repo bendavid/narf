@@ -89,6 +89,12 @@ class FitInputData:
             hconstraintweights = f['hconstraintweights']
             hdata_obs = f['hdata_obs']
 
+            if 'hdata_cov_inv' in f.keys():
+                hdata_cov_inv = f['hdata_cov_inv']
+                self.data_cov_inv = maketensor(hdata_cov_inv)
+            else:
+                self.data_cov_inv = None
+
             self.sparse = not 'hnorm' in f
 
             if self.sparse:
@@ -350,6 +356,14 @@ class Fitter:
         if self.binByBinStat:
             self.systgroupsfull.append("binByBinStat")
 
+        if options.externalCovariance and not options.chisqFit:
+            raise Exception('option "--externalCovariance" only works with "--chisqFit"')
+        if (options.chisqFit or options.externalCovariance) and options.binByBinStat:
+            raise Exception('option "--binByBinStat" currently not supported for options "--externalCovariance" and "--chisqFit"')
+
+        self.chisqFit = options.chisqFit
+        self.externalCovariance = options.externalCovariance
+
         self.nsystgroupsfull = len(self.systgroupsfull)
 
         self.pois = []
@@ -385,6 +399,18 @@ class Fitter:
 
         # observed number of events per bin
         self.nobs = tf.Variable(self.indata.data_obs, trainable=False, name="nobs")
+
+        if self.chisqFit:
+            if self.externalCovariance:
+                if self.indata.data_cov_inv is None:
+                    raise RuntimeError("No external covariance found in input data.")
+                # provided covariance
+                self.data_cov_inv = self.indata.data_cov_inv
+            else:
+                # covariance from data stat
+                if tf.math.reduce_any(self.nobs <= 0).numpy():
+                    raise RuntimeError("Bins in 'nobs <= 0' encountered, chi^2 fit can not be performed.")
+                self.data_cov_inv = tf.linalg.diag(tf.math.reciprocal(self.nobs))
 
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
@@ -893,21 +919,25 @@ class Fitter:
 
         nexp = nexpfullcentral
 
-        nobsnull = tf.equal(self.nobs,tf.zeros_like(self.nobs))
+        if self.chisqFit:
+            residual = tf.reshape(self.nobs - nexp,[-1,1]) #chi2 residual  
+            ln = lnfull = 0.5 * tf.reduce_sum(tf.matmul(residual, tf.matmul(self.data_cov_inv, residual), transpose_a=True))
+        else:
+            nobsnull = tf.equal(self.nobs,tf.zeros_like(self.nobs))
 
-        nexpsafe = tf.where(nobsnull, tf.ones_like(self.nobs), nexp)
-        lognexp = tf.math.log(nexpsafe)
+            nexpsafe = tf.where(nobsnull, tf.ones_like(self.nobs), nexp)
+            lognexp = tf.math.log(nexpsafe)
 
-        nexpnomsafe = tf.where(nobsnull, tf.ones_like(self.nobs), self.nexpnom)
-        lognexpnom = tf.math.log(nexpnomsafe)
+            nexpnomsafe = tf.where(nobsnull, tf.ones_like(self.nobs), self.nexpnom)
+            lognexpnom = tf.math.log(nexpnomsafe)
 
-        #final likelihood computation
+            #final likelihood computation
 
-        #poisson term
-        lnfull = tf.reduce_sum(-self.nobs*lognexp + nexp, axis=-1)
+            #poisson term
+            lnfull = tf.reduce_sum(-self.nobs*lognexp + nexp, axis=-1)
 
-        #poisson term with offset to improve numerical precision
-        ln = tf.reduce_sum(-self.nobs*(lognexp-lognexpnom) + nexp-self.nexpnom, axis=-1)
+            #poisson term with offset to improve numerical precision
+            ln = tf.reduce_sum(-self.nobs*(lognexp-lognexpnom) + nexp-self.nexpnom, axis=-1)
 
         #constraints
         lc = tf.reduce_sum(self.indata.constraintweights*0.5*tf.square(theta - self.theta0))
