@@ -448,51 +448,68 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
-    def pulls_and_constraints(self, cov):
-        systs = list(self.indata.systs.astype(str))
-        axis_systs = hist.axis.StrCategory(systs, name="systs")
+    def parms_hist(self, cov):
+        parms = list(self.parms.astype(str))
+        axis_parms = hist.axis.StrCategory(parms, name="parms")
 
-        pulls = self.x - self.theta0
+        values = self.x.numpy()
+        variances = tf.linalg.diag_part(cov)
 
-        h_pulls = hist.Hist(axis_systs, storage=hist.storage.Double(), name="pulls")
-        h_pulls.values()[...] = memoryview(pulls)
-        h_pulls = narf.ioutils.H5PickleProxy(h_pulls)
+        h = hist.Hist(axis_parms, storage=hist.storage.Weight(), name="parms")
+        h.values()[...] = memoryview(values)
+        h.variances()[...] = memoryview(variances)
+        h = narf.ioutils.H5PickleProxy(h)
 
-        constraints = tf.sqrt(tf.linalg.diag_part(cov))
+        values_prefit = self.theta0.numpy()
 
-        h_constraints = hist.Hist(axis_systs, storage=hist.storage.Double(), name="constraints")
-        h_constraints.values()[...] = memoryview(constraints)
-        h_constraints = narf.ioutils.H5PickleProxy(h_constraints)
+        # set prefit uncertainty of unconstrained systematics to 0, otherwise 1
+        nstat = self.npoi + self.indata.nsystnoconstraint
+        variances_prefit = tf.concat([tf.constant([0] * nstat), tf.constant([1] * (self.indata.nsyst - nstat))], axis=0)
 
-        return h_pulls, h_constraints
+        h_prefit = hist.Hist(axis_parms, storage=hist.storage.Weight(), name="parms_prefit")
+        h_prefit.values()[...] = memoryview(values_prefit)
+        h_prefit.variances()[...] = memoryview(variances_prefit)
+        h_prefit = narf.ioutils.H5PickleProxy(h_prefit)
+
+        return h, h_prefit
+
+    def cov_hist(self, cov):
+        parms = list(self.parms.astype(str))
+        axis_parms_x = hist.axis.StrCategory(parms, name="parms_x")
+        axis_parms_y = hist.axis.StrCategory(parms, name="parms_y")
+
+        h_cov = hist.Hist(axis_parms_x, axis_parms_y, storage=hist.storage.Double(), name="cov")
+        h_cov.values()[...] = memoryview(cov)
+        h_cov = narf.ioutils.H5PickleProxy(h_cov)
+
+        return h_cov
 
     @tf.function(reduce_retracing=True)
     def _compute_impact_group(self, cov, nstat, idxs):
         cov_reduced = tf.gather(cov, idxs, axis=0)
         cov_reduced = tf.gather(cov_reduced, idxs, axis=1)
-        v = tf.gather(cov[:nstat,:], idxs, axis=1)
-        invC_v = tf.linalg.solve(cov_reduced, tf.transpose(v)) 
-        v_invC_v = tf.reduce_sum(v * tf.transpose(invC_v), axis=1)
-        return tf.reshape(tf.sqrt(v_invC_v), (1,-1))
+        v = tf.gather(cov[:nstat], idxs, axis=1)
+        invC_v = tf.linalg.solve(cov_reduced, tf.transpose(v))
+        v_invC_v = tf.einsum('ij,ji->i', v, invC_v)
+        return tf.sqrt(v_invC_v)
 
     @tf.function
-    def _impacts_systs(self, nstat, cov, hess):
+    def _impacts_parms(self, nstat, cov, hess):
+        impacts = cov[:nstat]
 
-        impacts = cov[:nstat,:]
-
-        impacts_grouped = tf.concat([
-            self._compute_impact_group(cov, nstat, idxs)
-            for idxs in self.indata.systgroupidxs
-        ], axis=1)
+        impacts_grouped = tf.map_fn(
+            lambda idxs: self._compute_impact_group(cov, nstat, idxs), 
+            tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32), 
+            fn_output_signature=tf.TensorSpec(shape=(impacts.shape[0],), dtype=tf.float64)
+        )
+        impacts_grouped = tf.transpose(impacts_grouped)
 
         # impact data stat
         hess_stat = hess[:nstat,:nstat]
         identity = tf.eye(nstat, dtype=hess_stat.dtype)
         inv_hess_stat = tf.linalg.solve(hess_stat, identity)  # Solves H * X = I
         impacts_data_stat = tf.sqrt(tf.linalg.diag_part(inv_hess_stat))
-        impacts_data_stat = tf.reshape(impacts_data_stat, (1, -1))
-
-        impacts = tf.concat([impacts, impacts_data_stat], axis=1)
+        impacts_data_stat = tf.reshape(impacts_data_stat, (-1, 1))
         impacts_grouped = tf.concat([impacts_grouped, impacts_data_stat], axis=1)
 
         if self.binByBinStat:
@@ -502,45 +519,40 @@ class Fitter:
             hess_stat_no_bbb = hess_no_bbb[:nstat,:nstat]
             inv_hess_stat_no_bbb = tf.linalg.solve(hess_stat_no_bbb, identity)
             impacts_bbb_sq = tf.linalg.diag_part(inv_hess_stat - inv_hess_stat_no_bbb)
-            impacts_bbb = tf.sqrt(tf.maximum(tf.zeros_like(impacts_bbb_sq), impacts_bbb_sq))
-            impacts_bbb = tf.reshape(impacts_bbb, (1, -1))
-
-            impacts = tf.concat([impacts, impacts_bbb], axis=1)
+            impacts_bbb = tf.sqrt(tf.nn.relu(impacts_bbb_sq)) # max(0,x)
+            impacts_bbb = tf.reshape(impacts_bbb, (-1, 1))
             impacts_grouped = tf.concat([impacts_grouped, impacts_bbb], axis=1)
 
         return impacts, impacts_grouped
 
-    def impacts_systs(self, cov, hess):
-
+    def impacts_hists(self, cov, hess):
         # store impacts for all POIs and unconstrained nuisances
         nstat = self.npoi + self.indata.nsystnoconstraint
 
-        systs = list(self.indata.systs.astype(str))[:nstat]
+        parms = list(self.parms.astype(str))[:nstat]
 
-        impact_names = list(self.indata.systs.astype(str))
+        impact_names = list(self.parms.astype(str))
         impact_names_grouped = list(self.indata.systgroups.astype(str))
 
-        impacts, impacts_grouped = self._impacts_systs(nstat, cov, hess)
+        impacts, impacts_grouped = self._impacts_parms(nstat, cov, hess)
 
-        impact_names.append("stat")
         impact_names_grouped.append("stat")
 
         if self.binByBinStat:
-            impact_names.append("binByBinStat")
             impact_names_grouped.append("binByBinStat")
 
         # write out histograms
-        axis_systs = hist.axis.StrCategory(systs, name="systs")
-        axis_impacts = hist.axis.StrCategory(impact_names, name="inpacts")
-        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="inpacts")
+        axis_parms = hist.axis.StrCategory(parms, name="parms")
+        axis_impacts = hist.axis.StrCategory(impact_names, name="impacts")
+        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="impacts")
 
-        h = hist.Hist(axis_systs, axis_impacts, storage=hist.storage.Double(), name="impacts")
+        h = hist.Hist(axis_parms, axis_impacts, storage=hist.storage.Double(), name="impacts")
         h.values()[...] = memoryview(impacts)
         h = narf.ioutils.H5PickleProxy(h)
 
-        h_grouped = hist.Hist(axis_systs, axis_impacts_grouped, storage=hist.storage.Double(), name="impacts_grouped")
+        h_grouped = hist.Hist(axis_parms, axis_impacts_grouped, storage=hist.storage.Double(), name="impacts_grouped")
         h_grouped.values()[...] = memoryview(impacts_grouped)
-        h_grouped = narf.ioutils.H5PickleProxy(h)
+        h_grouped = narf.ioutils.H5PickleProxy(h_grouped)
 
         return h, h_grouped
 
@@ -564,69 +576,67 @@ class Fitter:
         gathered = tf.gather(dxdtheta0, idxs, axis=-1)
         squared = tf.square(gathered)
         summed = tf.reduce_sum(squared, axis=-1)
-        return tf.reshape(tf.sqrt(summed), (1,-1))
+        return tf.sqrt(summed)
 
     @tf.function
-    def _global_impacts_systs(self, cov):
+    def _global_impacts_parms(self, cov):
 
         dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
         
-        impacts_grouped = tf.concat([
-            self._compute_global_impact_group(dxdtheta0, idxs)
-            for idxs in self.indata.systgroupidxs
-        ], axis=1)
+        impacts_grouped = tf.map_fn(
+            lambda idxs: self._compute_global_impact_group(dxdtheta0, idxs), 
+            tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32), 
+            fn_output_signature=tf.TensorSpec(shape=(dxdtheta0.shape[0],), dtype=tf.float64)
+        )
+        impacts_grouped = tf.transpose(impacts_grouped)
 
         # global impact data stat
         if self.externalCovariance:
-            data_stat = dxdnobs @ tf.matmul(self.data_cov, dxdnobs, transpose_b = True)
-            data_stat = tf.sqrt(data_stat)
+            data_stat = tf.einsum('ij,jk,ik->i', dxdnobs, self.data_cov, dxdnobs)
         else:
-            data_stat = tf.sqrt(tf.reduce_sum(tf.square(dxdnobs) * self.nobs, axis=-1))
-        impacts_data_stat = tf.reshape(data_stat, (1, -1))
-        impacts = tf.concat([dxdtheta0, impacts_data_stat], axis=1)
+            data_stat = tf.reduce_sum(tf.square(dxdnobs) * self.nobs, axis=-1)
+        data_stat = tf.sqrt(data_stat)
+        impacts_data_stat = tf.reshape(data_stat, (-1, 1))
         impacts_grouped = tf.concat([impacts_grouped, impacts_data_stat], axis=1)
 
         if self.binByBinStat:
             # global impact bin-by-bin stat
             impacts_bbb = tf.sqrt(tf.reduce_sum(tf.square(dxdbeta0) * tf.math.reciprocal(self.indata.kstat), axis=-1))
-            impacts_bbb = tf.reshape(impacts_bbb, (1, -1))
-            impacts = tf.concat([impacts, impacts_bbb], axis=1)
+            impacts_bbb = tf.reshape(impacts_bbb, (-1, 1))
             impacts_grouped = tf.concat([impacts_grouped, impacts_bbb], axis=1)
 
-        return impacts, impacts_grouped
+        return dxdtheta0, impacts_grouped
 
-    def global_impacts_systs(self, cov):
+    def global_impacts_hists(self, cov):
         # store impacts for all POIs and unconstrained nuisances
         nstat = self.npoi + self.indata.nsystnoconstraint
 
-        systs = list(self.indata.systs.astype(str))[:nstat]
+        parms = list(self.parms.astype(str))[:nstat]
 
-        impacts, impacts_grouped = self._global_impacts_systs(cov[:nstat,:])
+        impacts, impacts_grouped = self._global_impacts_parms(cov[:nstat])
 
-        impact_names = list(self.indata.systs.astype(str))
+        impact_names = list(self.parms.astype(str))
         impact_names_grouped = list(self.indata.systgroups.astype(str))
 
         # global impact data stat
-        impact_names.append("stat")
         impact_names_grouped.append("stat")
 
         if self.binByBinStat:
             # global impact bin-by-bin stat
-            impact_names.append("binByBinStat")
             impact_names_grouped.append("binByBinStat")
 
         # write out histograms
-        axis_systs = hist.axis.StrCategory(systs, name="systs")
-        axis_impacts = hist.axis.StrCategory(impact_names, name="inpacts")
-        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="inpacts")
+        axis_parms = hist.axis.StrCategory(parms, name="parms")
+        axis_impacts = hist.axis.StrCategory(impact_names, name="impacts")
+        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="impacts")
 
-        h = hist.Hist(axis_systs, axis_impacts, storage=hist.storage.Double(), name="global_impacts")
+        h = hist.Hist(axis_parms, axis_impacts, storage=hist.storage.Double(), name="global_impacts")
         h.values()[...] = memoryview(impacts)
         h = narf.ioutils.H5PickleProxy(h)
 
-        h_grouped = hist.Hist(axis_systs, axis_impacts_grouped, storage=hist.storage.Double(), name="global_impacts_grouped")
+        h_grouped = hist.Hist(axis_parms, axis_impacts_grouped, storage=hist.storage.Double(), name="global_impacts_grouped")
         h_grouped.values()[...] = memoryview(impacts_grouped)
-        h_grouped = narf.ioutils.H5PickleProxy(h)
+        h_grouped = narf.ioutils.H5PickleProxy(h_grouped)
 
         return h, h_grouped
 
