@@ -42,14 +42,10 @@ if args.toys == -1:
 
 cov_prefit = fitter.prefit_covariance()
 
-results = {}
-
-results["projections"] = []
-for projection in args.project:
-    channel = projection[0]
-    axes = projection[1:]
-
-    results["projections"].append({"channel" : channel, "axes" : axes})
+results = {
+    "parms_prefit": fitter.parms_hist(cov_prefit, hist_name="prefit"),
+    "projections": [{"channel": projection[0], "axes": projection[1:]} for projection in args.project],
+}
 
 if args.saveHists:
 
@@ -132,7 +128,7 @@ if args.externalPostfit is not None:
         if "x" in fext.keys():
             # fitresult from combinetf 1
             x_ext = fext["x"][...]
-            parms_ext = fext["parms"][...]
+            parms_ext = fext["parms"][...].astype(str)
             cov_ext = fext["cov"][...]
         else:
             # fitresult from combinetf 2
@@ -150,7 +146,8 @@ if args.externalPostfit is not None:
 
     parmmap = {}
 
-    for iparm, parm in enumerate(fitter.parms):
+    parms = fitter.parms.astype(str)
+    for iparm, parm in enumerate(parms):
         parmmap[parm] = iparm
 
     for iparm_ext, parmi_ext in enumerate(parms_ext):
@@ -181,16 +178,13 @@ satnllvalfull, ndfsat = fitter.saturated_nll()
 satnllvalfull = satnllvalfull.numpy()
 ndfsat = ndfsat.numpy()
 
-h_parms, h_parms_prefit = fitter.parms_hist(cov)
-
 results.update({
     "nllvalfull" : nllvalfull,
     "satnllvalfull" : satnllvalfull,
     "ndfsat" : ndfsat,
     "postfit_profile" : postfit_profile,
     "cov": fitter.cov_hist(cov),
-    "parms": h_parms,
-    "parms_prefit": h_parms_prefit,
+    "parms": fitter.parms_hist(cov),
 })
 
 if args.doImpacts:

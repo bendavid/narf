@@ -369,7 +369,7 @@ class Fitter:
                 self.data_cov_inv = tf.reciprocal(tf.linalg.diag(self.nobs))
 
         # constraint minima for nuisance parameters
-        self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst],dtype=self.indata.dtype), trainable=False, name="theta0")
+        self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst], dtype=self.indata.dtype), trainable=False, name="theta0")
 
         # global observables for mc stat uncertainty
         self.beta0 = tf.ones_like(self.indata.data_obs)
@@ -404,30 +404,19 @@ class Fitter:
     def frequentistassign(self):
         self.theta0.assign(tf.random.normal(shape=self.theta0.shape, dtype=self.theta0.dtype))
 
-    def parms_hist(self, cov):
+    def parms_hist(self, cov, hist_name="parms"):
         parms = list(self.parms.astype(str))
         axis_parms = hist.axis.StrCategory(parms, name="parms")
 
         values = self.x.numpy()
         variances = tf.linalg.diag_part(cov)
 
-        h = hist.Hist(axis_parms, storage=hist.storage.Weight(), name="parms")
+        h = hist.Hist(axis_parms, storage=hist.storage.Weight(), name=hist_name)
         h.values()[...] = memoryview(values)
         h.variances()[...] = memoryview(variances)
         h = narf.ioutils.H5PickleProxy(h)
 
-        values_prefit = self.theta0.numpy()
-
-        # set prefit uncertainty of unconstrained systematics to 0, otherwise 1
-        nstat = self.npoi + self.indata.nsystnoconstraint
-        variances_prefit = tf.concat([tf.constant([0] * nstat), tf.constant([1] * (self.indata.nsyst - nstat))], axis=0)
-
-        h_prefit = hist.Hist(axis_parms, storage=hist.storage.Weight(), name="parms_prefit")
-        h_prefit.values()[...] = memoryview(values_prefit)
-        h_prefit.variances()[...] = memoryview(variances_prefit)
-        h_prefit = narf.ioutils.H5PickleProxy(h_prefit)
-
-        return h, h_prefit
+        return h
 
     def cov_hist(self, cov):
         parms = list(self.parms.astype(str))
@@ -578,7 +567,7 @@ class Fitter:
 
         impacts, impacts_grouped = self._global_impacts_parms(cov[:nstat])
 
-        impact_names = list(self.parms.astype(str))
+        impact_names = list(self.indata.systs.astype(str))
         impact_names_grouped = list(self.indata.systgroups.astype(str))
 
         # global impact data stat
