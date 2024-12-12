@@ -366,7 +366,7 @@ class Fitter:
                 # covariance from data stat
                 if tf.math.reduce_any(self.nobs <= 0).numpy():
                     raise RuntimeError("Bins in 'nobs <= 0' encountered, chi^2 fit can not be performed.")
-                self.data_cov_inv = tf.reciprocal(tf.linalg.diag(self.nobs))
+                self.data_cov_inv = tf.linalg.diag(tf.math.reciprocal(self.nobs))
 
         # constraint minima for nuisance parameters
         self.theta0 = tf.Variable(tf.zeros([self.indata.nsyst], dtype=self.indata.dtype), trainable=False, name="theta0")
