@@ -1,3 +1,4 @@
+import copy
 import tensorflow as tf
 import tensorflow_io as tfio
 import numpy as np
@@ -592,6 +593,7 @@ class Fitter:
 
         return h, h_grouped
 
+    @tf.function
     def _expvar_profiled(self, fun_exp, cov, compute_cov=False):
         dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
 
@@ -663,18 +665,15 @@ class Fitter:
             sRJ2 = sRJ2 + sumw2
         return expected, sRJ2
 
-    def _chi2(self, fun, cov, profile=True):
-        if profile:
-            res, rescov = self._expvar_profiled(fun, cov, compute_cov=True)
-        else:
-            res, rescov = self._expvar(fun, cov, compute_cov=True)
-
+    @tf.function
+    def _chi2(self, res, rescov):
         resv = tf.reshape(res, (-1,1))
 
         chi_square_value = tf.transpose(resv) @ tf.linalg.solve(rescov, resv)
 
         return chi_square_value[0,0]
 
+    @tf.function
     def _expvar(self, fun_exp, invhess, compute_cov=False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
         #FIXME switch back to optimized version at some point?
@@ -702,6 +701,7 @@ class Fitter:
             var = tf.reshape(var, expected.shape)
             return expected, var
 
+    @tf.function
     def _expvariations(self, fun_exp, cov, correlations):
         with tf.GradientTape() as t:
             expected = fun_exp()
@@ -838,7 +838,7 @@ class Fitter:
     def expected_variations(self, fun, cov, correlations=False):
         return self._expvariations(fun, cov, correlations=correlations)
 
-    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None):
+    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, hist_cov=False, name=None, label=None):
 
         def fun():
             return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
@@ -855,6 +855,13 @@ class Fitter:
 
         hists = {}
 
+        var_axes = []
+        if compute_variations:
+            axis_vars = hist.axis.StrCategory(self.parms, name="vars")
+            axis_downUpVar = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar")
+
+            var_axes = [axis_vars, axis_downUpVar]
+
         for channel, info in self.indata.channel_info.items():
             axes = info["axes"]
 
@@ -866,15 +873,9 @@ class Fitter:
             if not inclusive:
                 hist_axes.append(self.indata.axis_procs)
 
-            if compute_variations:
-                axis_vars = hist.axis.StrCategory(self.parms, name="vars")
-                axis_downUpVar = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar")
+            shape = tuple([len(a) for a in [*hist_axes, *var_axes]])
 
-                hist_axes.extend([axis_vars, axis_downUpVar])
-
-            shape = tuple([len(a) for a in hist_axes])
-
-            h = hist.Hist(*hist_axes, storage=hist.storage.Weight(), name=f"name_{channel}", label=label)
+            h = hist.Hist(*hist_axes, *var_axes, storage=hist.storage.Weight(), name=f"name_{channel}", label=label)
             h.values()[...] = memoryview(tf.reshape(exp[start:stop], shape))
             if compute_variance:
                 h.variances()[...] = memoryview(tf.reshape(var[start:stop], shape))
@@ -882,18 +883,32 @@ class Fitter:
                 h.variances()[...] = 0.
             hists[channel] = narf.ioutils.H5PickleProxy(h)
 
-        if compute_chi2:
+        if compute_chi2 or hist_cov:
             def fun_residual():
                 return fun() - self.nobs
 
-            chi2val = self.chi2(fun_residual, cov, profile=profile).numpy()
+            if profile:
+                res, rescov = self._expvar_profiled(fun_residual, cov, compute_cov=True)
+            else:
+                res, rescov = self._expvar(fun_residual, cov, compute_cov=True)
+
+            chi2val = self.chi2(res, rescov).numpy()
             ndf = tf.size(exp).numpy() - self.normalize
 
-            return hists, chi2val, ndf
+            # copy axes and rename
+            hist_axes_y = copy.deepcopy(hist_axes)
+            for a in hist_axes_y:
+                a.__dict__["name"] = a.name+"_y"
+
+            h_rescov = hist.Hist(*hist_axes, *hist_axes_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
+            h_rescov.values()[...] = memoryview(tf.reshape(rescov, h_rescov.shape))
+            h_rescov = narf.ioutils.H5PickleProxy(h_rescov)
+
+            return hists, h_rescov, chi2val, ndf
         else:
             return hists
 
-    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, name=None, label=None):
+    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, hist_cov=False, name=None, label=None):
 
         def fun():
             return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
@@ -916,11 +931,11 @@ class Fitter:
             hist_axes.append(self.indata.axis_procs)
             extra_axes.append(self.indata.axis_procs)
 
+        var_axes = []
         if compute_variations:
             axis_vars = hist.axis.StrCategory(self.parms, name="vars")
             axis_downUpVar = hist.axis.Regular(2, -2., 2., underflow=False, overflow=False, name = "downUpVar")
-
-            hist_axes.extend([axis_vars, axis_downUpVar])
+            var_axes = [axis_vars, axis_downUpVar]
 
         exp_shape = tuple([len(a) for a in exp_axes])
 
@@ -959,7 +974,7 @@ class Fitter:
         else:
             exp = tf.function(projection_fun)()
 
-        h = hist.Hist(*hist_axes, storage=hist.storage.Weight(), name=name, label=label)
+        h = hist.Hist(*hist_axes, *var_axes, storage=hist.storage.Weight(), name=name, label=label)
         h.values()[...] = memoryview(exp)
         if compute_variance:
             h.variances()[...] = memoryview(var)
@@ -967,16 +982,30 @@ class Fitter:
             h.variances()[...] = 0.
         h = narf.ioutils.H5PickleProxy(h)
 
-        if compute_chi2:
+        if compute_chi2 or hist_cov:
             def fun_residual():
                 return fun() - self.nobs
 
             projection_fun_residual = make_projection_fun(fun_residual)
 
-            chi2val = self.chi2(projection_fun_residual, cov, profile=profile).numpy()
+            if profile:
+                res, rescov = self._expvar_profiled(projection_fun_residual, cov, compute_cov=True)
+            else:
+                res, rescov = self._expvar(projection_fun_residual, cov, compute_cov=True)
+
+            chi2val = self.chi2(res, rescov).numpy()
             ndf = tf.size(exp).numpy() - self.normalize
 
-            return h, chi2val, ndf
+            # copy axes and rename
+            hist_axes_y = copy.deepcopy(hist_axes)
+            for a in hist_axes_y:
+                a.__dict__["name"] = a.name+"_y"
+
+            h_rescov = hist.Hist(*hist_axes, *hist_axes_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
+            h_rescov.values()[...] = memoryview(tf.reshape(rescov, h_rescov.shape))
+            h_rescov = narf.ioutils.H5PickleProxy(h_rescov)
+
+            return h, h_rescov, chi2val, ndf
         else:
             return h
 
@@ -1009,8 +1038,8 @@ class Fitter:
         return self._compute_yields(inclusive=True, profile=profile)
 
     @tf.function
-    def chi2(self, fun, cov, profile=True):
-        return self._chi2(fun, cov, profile=profile)
+    def chi2(self, res, rescov):
+        return self._chi2(res, rescov)
 
     @tf.function
     def saturated_nll(self):
