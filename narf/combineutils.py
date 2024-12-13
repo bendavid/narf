@@ -7,12 +7,6 @@ import h5py
 import hist
 import narf.ioutils
 
-class SimpleSparseTensor:
-    def __init__(self, indices, values, dense_shape):
-        self.indices = indices
-        self.values = values
-        self.dense_shape = dense_shape
-
 def maketensor(h5dset):
     if 'original_shape' in h5dset.attrs:
         shape = h5dset.attrs['original_shape']
@@ -35,7 +29,7 @@ def makesparsetensor(h5group):
     values = maketensor(h5group['values'])
     dense_shape = h5group.attrs['dense_shape']
 
-    return SimpleSparseTensor(indices,values,dense_shape)
+    return tf.sparse.SparseTensor(indices, values, dense_shape)
 
 class FitInputData:
     def __init__(self, filename, pseudodata=None, normalize=False):
@@ -727,7 +721,7 @@ class Fitter:
 
         return expvars
 
-    def _compute_yields_noBBB(self):
+    def _compute_yields_noBBB(self, compute_normfull=False):
         xpoi = self.x[:self.npoi]
         theta = self.x[self.npoi:]
 
@@ -754,48 +748,46 @@ class Fitter:
         mthetaalpha = tf.reshape(mthetaalpha,[2*self.indata.nsyst,1])
 
         if self.indata.sparse:
-            raise NotImplementedError("sparse mode is not supported yet")
-        else:
-            #matrix encoding effect of nuisance parameters
-            #memory efficient version (do summation together with multiplication in a single tensor contraction step)
-            #this is equivalent to
-            #alpha = tf.reshape(alpha,[-1,1,1])
-            #theta = tf.reshape(theta,[-1,1,1])
-            #logk = logkavg + alpha*logkhalfdiff
-            #logktheta = theta*logk
-            #logsnorm = tf.reduce_sum(logktheta, axis=0)
+            logsnorm = tf.sparse.sparse_dense_matmul(self.indata.logk_sparse, mthetaalpha)
+            logsnorm = tf.squeeze(logsnorm,-1)
+            snorm = tf.exp(logsnorm)
+            
+            snormnorm_sparse = self.indata.norm_sparse.with_values(snorm * self.indata.norm_sparse.values)
+            nexpfullcentral = tf.sparse.sparse_dense_matmul(snormnorm_sparse, mrnorm)
+            nexpfullcentral = tf.squeeze(nexpfullcentral,-1)
 
+            if compute_normfull:
+                snormnorm = tf.sparse.to_dense(snormnorm_sparse)
+
+        else:
             mlogk = tf.reshape(self.indata.logk,[self.indata.nbins*self.indata.nproc,2*self.indata.nsyst])
             logsnorm = tf.matmul(mlogk,mthetaalpha)
             logsnorm = tf.reshape(logsnorm,[self.indata.nbins,self.indata.nproc])
 
             snorm = tf.exp(logsnorm)
 
-            #final expected yields per-bin including effect of signal
-            #strengths and nuisance parmeters
-            #memory efficient version (do summation together with multiplication in a single tensor contraction step)
-            #equivalent to (with some reshaping to explicitly match indices)
-            #rnorm = tf.reshape(rnorm,[1,-1])
-            #pnormfull = rnorm*snorm*norm
-            #nexpfull = tf.reduce_sum(pnormfull,axis=-1)
             snormnorm = snorm*self.indata.norm
             nexpfullcentral = tf.matmul(snormnorm, mrnorm)
             nexpfullcentral = tf.squeeze(nexpfullcentral,-1)
 
-            # if options.saveHists:
+        # if options.saveHists:
+        if compute_normfull:
             normfullcentral = ernorm*snormnorm
+        else: 
+            normfullcentral = None
 
         if self.normalize:
             # FIXME this should be done per-channel ideally
             normscale = tf.reduce_sum(self.nobs)/tf.reduce_sum(nexpfullcentral)
 
             nexpfullcentral *= normscale
-            normfullcentral *= normscale
+            if compute_normfull:
+                normfullcentral *= normscale
 
         return nexpfullcentral, normfullcentral
 
-    def _compute_yields_with_beta(self, profile=True, profile_grad=True):
-        nexpfullcentral, normfullcentral = self._compute_yields_noBBB()
+    def _compute_yields_with_beta(self, profile=True, profile_grad=True, compute_normfull=False):
+        nexpfullcentral, normfullcentral = self._compute_yields_noBBB(compute_normfull)
 
         nexpfull = nexpfullcentral
         normfull = normfullcentral
@@ -809,19 +801,21 @@ class Fitter:
             else:
                 beta = self.beta0
             nexpfull = beta*nexpfullcentral
-            normfull = beta[..., None]*normfullcentral
+            if compute_normfull:
+                normfull = beta[..., None]*normfullcentral
 
             if self.normalize:
                 # FIXME this is probably not fully consistent when combined with the binByBinStat
                 normscale = tf.reduce_sum(self.nobs)/tf.reduce_sum(nexpfull)
 
                 nexpfull *= normscale
-                normfull *= normscale
+                if compute_normfull:
+                    normfull *= normscale
 
         return nexpfull, normfull, beta
 
     def _compute_yields(self, inclusive=True, profile=True, profile_grad=True):
-        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad)
+        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad, compute_normfull=inclusive)
         if inclusive:
             return nexpfullcentral
         else:
@@ -1065,7 +1059,7 @@ class Fitter:
     def _compute_nll(self, profile=True, profile_grad=True):
         theta = self.x[self.npoi:]
 
-        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad)
+        nexpfullcentral, _, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad, compute_normfull=False)
 
         nexp = nexpfullcentral
 
