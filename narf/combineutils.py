@@ -815,7 +815,7 @@ class Fitter:
         return nexpfull, normfull, beta
 
     def _compute_yields(self, inclusive=True, profile=True, profile_grad=True):
-        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad, compute_normfull=inclusive)
+        nexpfullcentral, normfullcentral, beta = self._compute_yields_with_beta(profile=profile, profile_grad=profile_grad, compute_normfull=not inclusive)
         if inclusive:
             return nexpfullcentral
         else:
@@ -889,13 +889,12 @@ class Fitter:
             chi2val = self.chi2(res, rescov).numpy()
             ndf = tf.size(exp).numpy() - self.normalize
 
-            # copy axes and rename
-            hist_axes_y = copy.deepcopy(hist_axes)
-            for a in hist_axes_y:
-                a.__dict__["name"] = a.name+"_y"
+            # flat axes for covariance matrix, since it can go across channels
+            flat_axis_x = hist.axis.Integer(0, rescov.shape[0], underflow=False, overflow=False, name="x")
+            flat_axis_y = hist.axis.Integer(0, rescov.shape[1], underflow=False, overflow=False, name="y")
 
-            h_rescov = hist.Hist(*hist_axes, *hist_axes_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
-            h_rescov.values()[...] = memoryview(tf.reshape(rescov, h_rescov.shape))
+            h_rescov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
+            h_rescov.values()[...] = memoryview(rescov)
             h_rescov = narf.ioutils.H5PickleProxy(h_rescov)
 
             return hists, h_rescov, chi2val, ndf
@@ -990,13 +989,12 @@ class Fitter:
             chi2val = self.chi2(res, rescov).numpy()
             ndf = tf.size(exp).numpy() - self.normalize
 
-            # copy axes and rename
-            hist_axes_y = copy.deepcopy(hist_axes)
-            for a in hist_axes_y:
-                a.__dict__["name"] = a.name+"_y"
+            # flat axes for covariance matrix, since it can go across channels
+            flat_axis_x = hist.axis.Integer(0, rescov.shape[0], underflow=False, overflow=False, name="x")
+            flat_axis_y = hist.axis.Integer(0, rescov.shape[1], underflow=False, overflow=False, name="y")
 
-            h_rescov = hist.Hist(*hist_axes, *hist_axes_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
-            h_rescov.values()[...] = memoryview(tf.reshape(rescov, h_rescov.shape))
+            h_rescov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
+            h_rescov.values()[...] = memoryview(rescov)
             h_rescov = narf.ioutils.H5PickleProxy(h_rescov)
 
             return h, h_rescov, chi2val, ndf
