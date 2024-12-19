@@ -21,7 +21,10 @@ parser.add_argument("--allowNegativePOI", default=False, action='store_true', he
 parser.add_argument("--POIDefault", default=1., type=float, help="mode for POI's")
 parser.add_argument("--saveHists", default=False, action='store_true', help="save prefit and postfit histograms")
 parser.add_argument("--computeHistErrors", default=False, action='store_true', help="propagate uncertainties to prefit and postfit histograms")
+parser.add_argument("--computeHistCov", default=False, action='store_true', help="propagate covariance of histogram bins (inclusive in processes)")
+parser.add_argument("--computeHistImpacts", default=False, action='store_true', help="propagate global impacts on histogram bins (inclusive in processes)")
 parser.add_argument("--computeVariations", default=False, action='store_true', help="save postfit histograms with each noi varied up to down")
+parser.add_argument("--noChi2", default=False, action='store_true', help="Do not compute chi2 on prefit/postfit histograms")
 parser.add_argument("--binByBinStat", default=False, action='store_true', help="add bin-by-bin statistical uncertainties on templates (adding sumW2 on variance)")
 parser.add_argument("--externalPostfit", default=None, help="load posfit nuisance parameters and covariance from result of an external fit")
 parser.add_argument("--pseudoData", default=None, type=str, help="run fit on pseudo data with the given name")
@@ -48,6 +51,7 @@ results = {
 }
 
 if args.saveHists:
+    print("Save prefit hists")
 
     hist_data_obs, hist_nobs = fitter.observed_hists()
     results.update({"hist_data_obs" : hist_data_obs,
@@ -66,33 +70,79 @@ if args.saveHists:
         projection.update({"hist_data_obs" : hist_data_obs,
                     "hist_nobs" : hist_nobs,})
 
-    hist_prefit_inclusive, hist_cov_postfit_inclusive, chi2_prefit, ndf_prefit = fitter.expected_hists(cov_prefit, inclusive=True, profile=False, compute_variance=args.computeHistErrors, compute_chi2=True, name = "prefit_inclusive", label = "prefit expected number of events for all processes combined")
+    print(f"Save - inclusive")
 
-    hist_prefit = fitter.expected_hists(cov_prefit, inclusive=False, profile=False, compute_variance=args.computeHistErrors, name = "prefit", label = "prefit expected number of events")
+    hist_prefit_inclusive, aux_info = fitter.expected_hists(
+        cov_prefit, 
+        inclusive=True, 
+        profile=False, 
+        compute_variance=args.computeHistErrors, 
+        compute_chi2=not args.noChi2, 
+        aux_info=True,
+        name = "prefit_inclusive", 
+        label = "prefit expected number of events for all processes combined",
+        )
+
+    print(f"Save - processes")
+
+    hist_prefit = fitter.expected_hists(
+        cov_prefit, 
+        inclusive=False, 
+        profile=False, 
+        compute_variance=args.computeHistErrors, 
+        name = "prefit", 
+        label = "prefit expected number of events",
+        )
 
     results.update({
         "hist_prefit_inclusive" : hist_prefit_inclusive,
         "hist_prefit" : hist_prefit,
-        "ndf_prefit": ndf_prefit,
-        "chi2_prefit": chi2_prefit,
+
     })
+    if not args.noChi2:
+        results["ndf_prefit"] = aux_info["ndf"]
+        results["chi2_prefit"] = aux_info["chi2"]
 
     for projection in results["projections"]:
         channel = projection["channel"]
         axes = projection["axes"]
 
+        print(f"Save projection for channel {channel} - inclusive")
+
         axes_str = "-".join(axes)
 
-        hist_prefit_inclusive, hist_cov_postfit_inclusive, chi2_prefit, ndf_prefit = fitter.expected_projection_hist(cov=cov_prefit, channel=channel, axes=axes, inclusive=True, profile=False, compute_variance=args.computeHistErrors, compute_chi2=True, name=f"prefit_inclusive_projection_{channel}_{axes_str}", label=f"prefit expected number of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
+        hist_prefit_inclusive, aux_info = fitter.expected_projection_hist(
+            cov=cov_prefit, 
+            channel=channel, 
+            axes=axes, 
+            inclusive=True, 
+            profile=False, 
+            compute_variance=args.computeHistErrors, 
+            compute_chi2=not args.noChi2, 
+            aux_info=True,
+            name=f"prefit_inclusive_projection_{channel}_{axes_str}", 
+            label=f"prefit expected number of events for all processes combined, projection for channel {channel} and axes {axes_str}.",
+            )
 
-        hist_prefit = fitter.expected_projection_hist(cov=cov_prefit, channel=channel, axes=axes, inclusive=False, profile=False, compute_variance=args.computeHistErrors, name=f"prefit_projection_{channel}_{axes_str}", label=f"prefit expected number of events, projection for channel {channel} and axes {axes_str}.")
+        print(f"Save projection for channel {channel} - processes")
+
+        hist_prefit = fitter.expected_projection_hist(
+            cov=cov_prefit, 
+            channel=channel, 
+            axes=axes, 
+            inclusive=False, 
+            profile=False, 
+            compute_variance=args.computeHistErrors,
+            name=f"prefit_projection_{channel}_{axes_str}", label=f"prefit expected number of events, projection for channel {channel} and axes {axes_str}.",
+            )
 
         projection.update({
             "hist_prefit_inclusive" : hist_prefit_inclusive,
-            "hist_prefit" : hist_prefit,
-            "ndf_prefit": ndf_prefit,
-            "chi2_prefit": chi2_prefit,
+            "hist_prefit" : hist_prefit
         })
+    if not args.noChi2:
+        projection["ndf_prefit"] = aux_info["ndf"]
+        projection["chi2_prefit"] = aux_info["chi2"]
 
     if args.computeVariations:
         cov_prefit_variations = fitter.prefit_covariance(unconstrained_err=1.)
@@ -199,20 +249,46 @@ if args.doImpacts:
         results["global_impacts_grouped"] = h_grouped
 
 if args.saveHists:
+    print("Save postfit hists")
 
-    hist_postfit_inclusive, hist_cov_postfit_inclusive, chi2_postfit, ndf_postfit = fitter.expected_hists(
-        cov, inclusive=True, profile=postfit_profile, compute_variance=args.computeHistErrors, compute_chi2=True, hist_cov=True,
-        name = "postfit_inclusive", label = "postfit expected number of events for all processes combined")
+    print(f"Save - inclusive")
 
-    hist_postfit = fitter.expected_hists(cov, inclusive=False, profile=postfit_profile, compute_variance=args.computeHistErrors, name = "postfit", label = "postfit expected number of events")
+    hist_postfit_inclusive, aux_info = fitter.expected_hists(
+        cov, 
+        inclusive=True, 
+        profile=postfit_profile, 
+        compute_variance=args.computeHistErrors, 
+        compute_cov=args.computeHistCov,
+        compute_global_impacts=args.computeHistImpacts,
+        compute_chi2=not args.noChi2,
+        aux_info=True,
+        name = "postfit_inclusive", 
+        label = "postfit expected number of events for all processes combined",
+        )
+
+    print(f"Save - processes")
+
+    hist_postfit = fitter.expected_hists(
+        cov, 
+        inclusive=False, 
+        profile=postfit_profile, 
+        compute_variance=args.computeHistErrors, 
+        name = "postfit", 
+        label = "postfit expected number of events",
+        )
 
     results.update({
         "hist_postfit_inclusive" : hist_postfit_inclusive,
-        "hist_cov_postfit_inclusive" : hist_cov_postfit_inclusive,
         "hist_postfit" : hist_postfit,
-        "ndf_postfit": ndf_postfit,
-        "chi2_postfit": chi2_postfit,
     })
+    if not args.noChi2:
+        results["ndf_postfit"] = aux_info["ndf"]
+        results["chi2_postfit"] = aux_info["chi2"]
+    if args.computeHistCov:
+        results["hist_cov_postfit_inclusive"] = aux_info["hist_cov"]    
+    if args.computeHistImpacts:
+        results["hist_global_impacts_postfit_inclusive"] = aux_info["hist_global_impacts"]
+        results["hist_global_impacts_grouped_postfit_inclusive"] = aux_info["hist_global_impacts_grouped"]
 
     for projection in results["projections"]:
         channel = projection["channel"]
@@ -220,26 +296,73 @@ if args.saveHists:
 
         axes_str = "-".join(axes)
 
-        hist_postfit_inclusive, hist_cov_postfit_inclusive, chi2_postfit, ndf_postfit = fitter.expected_projection_hist(
-            cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, compute_variance=args.computeHistErrors, compute_chi2=True, hist_cov=True,
-            name=f"postfit_inclusive_projection_{channel}_{axes_str}", label=f"postfit expected number of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
+        print(f"Save projection for channel {channel} - inclusive")
 
-        hist_postfit = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=False, profile=postfit_profile, compute_variance=args.computeHistErrors, name=f"postfit_projection_{channel}_{axes_str}", label=f"postfit expected number of events, projection for channel {channel} and axes {axes_str}.")
+        hist_postfit_inclusive, aux_info = fitter.expected_projection_hist(
+            cov=cov, 
+            channel=channel, 
+            axes=axes, 
+            inclusive=True, 
+            profile=postfit_profile, 
+            compute_variance=args.computeHistErrors, 
+            compute_cov=args.computeHistCov,
+            compute_global_impacts=args.computeHistImpacts,
+            compute_chi2=not args.noChi2,
+            aux_info=True,
+            name=f"postfit_inclusive_projection_{channel}_{axes_str}", 
+            label=f"postfit expected number of events for all processes combined, projection for channel {channel} and axes {axes_str}.",
+            )
+
+        print(f"Save projection for channel {channel} - inclusive")
+
+        hist_postfit = fitter.expected_projection_hist(
+            cov=cov, 
+            channel=channel, 
+            axes=axes, 
+            inclusive=False, 
+            profile=postfit_profile, 
+            compute_variance=args.computeHistErrors, 
+            name=f"postfit_projection_{channel}_{axes_str}", 
+            label=f"postfit expected number of events, projection for channel {channel} and axes {axes_str}.",
+            )
 
         projection.update({
             "hist_postfit_inclusive" : hist_postfit_inclusive,
-            "hist_cov_postfit_inclusive" : hist_cov_postfit_inclusive,
             "hist_postfit" : hist_postfit,
-            "ndf_postfit": ndf_postfit,
-            "chi2_postfit": chi2_postfit,
         })
+        if not args.noChi2:
+            projection["ndf_postfit"] = aux_info["ndf"]
+            projection["chi2_postfit"] = aux_info["chi2"]
+        if args.computeHistCov:
+            projection["hist_cov_postfit_inclusive"] = aux_info["hist_cov"]
+        if args.computeHistImpacts:
+            projection["hist_global_impacts_postfit_inclusive"] = aux_info["hist_global_impacts"]
+            projection["hist_global_impacts_grouped_postfit_inclusive"] = aux_info["hist_global_impacts_grouped"]
 
     if args.computeVariations:
-        hist_postfit_variations = fitter.expected_hists(cov, inclusive=True, profile=postfit_profile, profile_grad=False, compute_variance=False, compute_variations=True, name = "postfit_inclusive_variations", label = "postfit expected number of events with variations of events for all processes combined")
+        hist_postfit_variations = fitter.expected_hists(
+            cov, 
+            inclusive=True, 
+            profile=postfit_profile, 
+            profile_grad=False, 
+            compute_variance=False, 
+            compute_variations=True, 
+            name = "postfit_inclusive_variations", 
+            label = "postfit expected number of events with variations of events for all processes combined",
+            )
 
         results["hist_postfit_variations"] = hist_postfit_variations
 
-        hist_postfit_variations_correlated = fitter.expected_hists(cov, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, correlated_variations=True, name = "hist_postfit_variations_correlated", label = "postfit expected number of events with variations of events (including correlations) for all processes combined")
+        hist_postfit_variations_correlated = fitter.expected_hists(
+            cov, 
+            inclusive=True, 
+            profile=postfit_profile, 
+            compute_variance=False, 
+            compute_variations=True, 
+            correlated_variations=True, 
+            name = "hist_postfit_variations_correlated", 
+            label = "postfit expected number of events with variations of events (including correlations) for all processes combined",
+            )
 
         results["hist_postfit_variations_correlated"] = hist_postfit_variations_correlated
 
@@ -249,11 +372,33 @@ if args.saveHists:
 
             axes_str = "-".join(axes)
 
-            hist_postfit_variations = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, profile_grad=False, compute_variance=False, compute_variations=True, name = f"postfit_inclusive_variations_projection_f{channel}_f{axes_str}", label = f"postfit expected number of events with variations of events for all processes combined, projection for channel {channel} and axes {axes_str}.")
+            hist_postfit_variations = fitter.expected_projection_hist(
+                cov=cov, 
+                channel=channel, 
+                axes=axes, 
+                inclusive=True, 
+                profile=postfit_profile, 
+                profile_grad=False, 
+                compute_variance=False, 
+                compute_variations=True, 
+                name = f"postfit_inclusive_variations_projection_f{channel}_f{axes_str}", 
+                label = f"postfit expected number of events with variations of events for all processes combined, projection for channel {channel} and axes {axes_str}.",
+                )
 
             projection["hist_postfit_variations"] = hist_postfit_variations
 
-            hist_postfit_variations_correlated = fitter.expected_projection_hist(cov=cov, channel=channel, axes=axes, inclusive=True, profile=postfit_profile, compute_variance=False, compute_variations=True, correlated_variations=True, name = f"postfit_inclusive_variations_correlated_projection_f{channel}_f{axes_str}", label = f"postfit expected number of events with variations of events (including correlations) for all processes combined, projection for channel {channel} and axes {axes_str}.")
+            hist_postfit_variations_correlated = fitter.expected_projection_hist(
+                cov=cov, 
+                channel=channel, 
+                axes=axes, 
+                inclusive=True, 
+                profile=postfit_profile, 
+                compute_variance=False, 
+                compute_variations=True, 
+                correlated_variations=True, 
+                name = f"postfit_inclusive_variations_correlated_projection_f{channel}_f{axes_str}", 
+                label = f"postfit expected number of events with variations of events (including correlations) for all processes combined, projection for channel {channel} and axes {axes_str}.",
+                )
 
             projection["hist_postfit_variations_correlated"] = hist_postfit_variations_correlated
 

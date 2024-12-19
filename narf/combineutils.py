@@ -172,7 +172,19 @@ class FitInputData:
                 # Finally, set self.logk to the new computed logk_array
                 self.logk = logk_array
                 self.norm = self.norm * (data_sum / norm_sum)[None, None, ...]
+    
+    def getImpactsAxes(self):
+        impact_names = list(self.systs.astype(str))
+        return hist.axis.StrCategory(impact_names, name="impacts")
 
+    def getImpactsAxesGrouped(self, bin_by_bin_stat=False):
+        impact_names_grouped = list(self.systgroups.astype(str))
+        # impact data stat
+        impact_names_grouped.append("stat")
+        if bin_by_bin_stat:
+            # impact bin-by-bin stat
+            impact_names_grouped.append("binByBinStat")
+        return hist.axis.StrCategory(impact_names_grouped, name="impacts")
 
 class FitDebugData:
     def __init__(self, indata):
@@ -475,22 +487,14 @@ class Fitter:
         # store impacts for all POIs and unconstrained nuisances
         nstat = self.npoi + self.indata.nsystnoconstraint
 
-        parms = list(self.parms.astype(str))[:nstat]
-
-        impact_names = list(self.parms.astype(str))
-        impact_names_grouped = list(self.indata.systgroups.astype(str))
-
         impacts, impacts_grouped = self._impacts_parms(nstat, cov, hess)
 
-        impact_names_grouped.append("stat")
-
-        if self.binByBinStat:
-            impact_names_grouped.append("binByBinStat")
+        parms = list(self.parms.astype(str))[:nstat]
 
         # write out histograms
         axis_parms = hist.axis.StrCategory(parms, name="parms")
-        axis_impacts = hist.axis.StrCategory(impact_names, name="impacts")
-        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="impacts")
+        axis_impacts = self.indata.getImpactsAxes()
+        axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
         h = hist.Hist(axis_parms, axis_impacts, storage=hist.storage.Double(), name="impacts")
         h.values()[...] = memoryview(impacts)
@@ -518,21 +522,21 @@ class Fitter:
         return dxdtheta0, dxdnobs, dxdbeta0
 
     @tf.function(reduce_retracing=True)
-    def _compute_global_impact_group(self, dxdtheta0, idxs):
-        gathered = tf.gather(dxdtheta0, idxs, axis=-1)
-        squared = tf.square(gathered)
-        summed = tf.reduce_sum(squared, axis=-1)
-        return tf.sqrt(summed)
+    def _compute_global_impact_group(self, d_squared, idxs):
+        gathered = tf.gather(d_squared, idxs, axis=-1)
+        d_squared_summed = tf.reduce_sum(d_squared, axis=-1)
+        return tf.sqrt(d_squared_summed)
 
     @tf.function
     def _global_impacts_parms(self, cov):
 
         dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
         
+        dxdtheta0_squared = tf.square(dxdtheta0)
         impacts_grouped = tf.map_fn(
-            lambda idxs: self._compute_global_impact_group(dxdtheta0, idxs), 
+            lambda idxs: self._compute_global_impact_group(dxdtheta0_squared, idxs), 
             tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32), 
-            fn_output_signature=tf.TensorSpec(shape=(dxdtheta0.shape[0],), dtype=tf.float64)
+            fn_output_signature=tf.TensorSpec(shape=(dxdtheta0_squared.shape[0],), dtype=tf.float64)
         )
         impacts_grouped = tf.transpose(impacts_grouped)
 
@@ -558,24 +562,14 @@ class Fitter:
         # store impacts for all POIs and unconstrained nuisances
         nstat = self.npoi + self.indata.nsystnoconstraint
 
-        parms = list(self.parms.astype(str))[:nstat]
-
         impacts, impacts_grouped = self._global_impacts_parms(cov[:nstat])
 
-        impact_names = list(self.indata.systs.astype(str))
-        impact_names_grouped = list(self.indata.systgroups.astype(str))
-
-        # global impact data stat
-        impact_names_grouped.append("stat")
-
-        if self.binByBinStat:
-            # global impact bin-by-bin stat
-            impact_names_grouped.append("binByBinStat")
+        parms = list(self.parms.astype(str))[:nstat]
 
         # write out histograms
         axis_parms = hist.axis.StrCategory(parms, name="parms")
-        axis_impacts = hist.axis.StrCategory(impact_names, name="impacts")
-        axis_impacts_grouped = hist.axis.StrCategory(impact_names_grouped, name="impacts")
+        axis_impacts = self.indata.getImpactsAxes()
+        axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
         h = hist.Hist(axis_parms, axis_impacts, storage=hist.storage.Double(), name="global_impacts")
         h.values()[...] = memoryview(impacts)
@@ -588,7 +582,7 @@ class Fitter:
         return h, h_grouped
 
     @tf.function
-    def _expvar_profiled(self, fun_exp, cov, compute_cov=False):
+    def _expvar_profiled(self, fun_exp, cov, compute_cov=False, compute_global_impacts=False):
         dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(cov)
 
         with tf.GradientTape() as t:
@@ -615,18 +609,51 @@ class Fitter:
         dexpdbeta0 *= dbeta0[None, :]
 
         if compute_cov:
-            expcov = dexpdtheta0 @ tf.transpose(dexpdtheta0) + dexpdnobs @ tf.transpose(dexpdnobs)
+            expcov_stat = dexpdnobs @ tf.transpose(dexpdnobs)
+            expcov = dexpdtheta0 @ tf.transpose(dexpdtheta0) + expcov_stat
             if self.binByBinStat:
-                expcov += dexpdbeta0 @ tf.transpose(dexpdbeta0)
-            return expected, expcov
+                expcov_binByBinStat = dexpdbeta0 @ tf.transpose(dexpdbeta0)
+                expcov += expcov_binByBinStat
+
+            expvar = tf.linalg.diag_part(expcov)
         else:
-            expvar = tf.reduce_sum(tf.square(dexpdtheta0), axis=-1) + tf.reduce_sum(tf.square(dexpdnobs), axis=-1)
+            expcov = None
+            expvar_stat = tf.reduce_sum(tf.square(dexpdnobs), axis=-1)
+            expvar = tf.reduce_sum(tf.square(dexpdtheta0), axis=-1) + expvar_stat
             if self.binByBinStat:
-                expvar += tf.reduce_sum(tf.square(dexpdbeta0), axis=-1)
+                expvar_binByBinStat = tf.reduce_sum(tf.square(dexpdbeta0), axis=-1)
+                expvar += expvar_binByBinStat
+        
+        expvar = tf.reshape(expvar, expected.shape)
 
-            expvar = tf.reshape(expvar, expected.shape)
+        if compute_global_impacts:
+            dexpdtheta0_squared = tf.square(dexpdtheta0)
+            impacts_grouped = tf.map_fn(
+                lambda idxs: self._compute_global_impact_group(dexpdtheta0_squared, idxs), 
+                tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32), 
+                fn_output_signature=tf.TensorSpec(shape=(dexpdtheta0_squared.shape[0],), dtype=tf.float64)
+            )
 
-            return expected, expvar
+            impacts = dexpdtheta0
+            impacts_grouped = tf.transpose(impacts_grouped)
+
+            if compute_cov:
+                expvar_stat = tf.linalg.diag_part(expcov_stat)
+            impacts_stat = tf.sqrt(expvar_stat)
+            impacts_stat = tf.reshape(impacts_stat, (-1, 1))
+            impacts_grouped = tf.concat([impacts_grouped, impacts_stat], axis=1)
+
+            if self.binByBinStat:
+                if compute_cov:
+                    expvar_binByBinStat = tf.linalg.diag_part(expcov_binByBinStat)
+                impacts_binByBinStat = tf.sqrt(expvar_binByBinStat)
+                impacts_binByBinStat = tf.reshape(impacts_binByBinStat, (-1, 1))
+                impacts_grouped = tf.concat([impacts_grouped, impacts_binByBinStat], axis=1)
+        else:
+            impacts = None
+            impacts_grouped = None
+
+        return expected, expvar, expcov, impacts, impacts_grouped
 
     def _expvar_optimized(self, fun_exp, cov, skipBinByBinStat = False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
@@ -668,32 +695,67 @@ class Fitter:
         return chi_square_value[0,0]
 
     @tf.function
-    def _expvar(self, fun_exp, invhess, compute_cov=False):
+    def _expvar(self, fun_exp, invhess, compute_cov=False, compute_global_impacts=False):
         # compute uncertainty on expectation propagating through uncertainty on fit parameters using full covariance matrix
         #FIXME switch back to optimized version at some point?
 
         with tf.GradientTape() as t:
-            t.watch([self.nobs, self.beta0])
+            t.watch([self.theta0, self.nobs, self.beta0])
             expected = fun_exp()
             expected_flat = tf.reshape(expected, (-1,))
-        dexpdx, dexpdnobs, dexpdbeta0 = t.jacobian(expected_flat, [self.x, self.nobs, self.beta0])
+        pdexpdx, pdexpdnobs, pdexpdbeta0 = t.jacobian(expected_flat, [self.x, self.nobs, self.beta0])
 
-        cov = dexpdx @ tf.matmul(invhess, dexpdx, transpose_b = True)
+        expcov = pdexpdx @ tf.matmul(invhess, pdexpdx, transpose_b = True)
 
-        if dexpdnobs is not None:
+        if pdexpdnobs is not None:
             varnobs = self.nobs
-            cov += dexpdnobs @ (varnobs[:, None] * tf.transpose(dexpdnobs))
-
+            exp_cov_stat = pdexpdnobs @ (varnobs[:, None] * tf.transpose(pdexpdnobs))
+            expcov += exp_cov_stat
+        
+        expcov_noBBB = expcov
         if self.binByBinStat:
             varbeta0 = tf.math.reciprocal(self.indata.kstat)
-            cov += dexpdbeta0 @ (varbeta0[:, None] * tf.transpose(dexpdbeta0))
+            exp_cov_BBB = pdexpdbeta0 @ (varbeta0[:, None] * tf.transpose(pdexpdbeta0))
+            expcov += exp_cov_BBB
 
-        if compute_cov:
-            return expected, cov
+        if compute_global_impacts:
+            #FIXME This is not correct
+
+            dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(invhess)
+            dexpdtheta0 = pdexpdx @ dxdtheta0
+
+            var_theta0 = tf.where(self.indata.constraintweights == 0., tf.zeros_like(self.indata.constraintweights), tf.math.reciprocal(self.indata.constraintweights))
+
+            dtheta0 = tf.math.sqrt(var_theta0)
+            dexpdtheta0 *= dtheta0[None, :]
+            dexpdtheta0_squared = tf.square(dexpdtheta0)
+
+            impacts_grouped = tf.map_fn(
+                lambda idxs: self._compute_global_impact_group(dexpdtheta0_squared, idxs), 
+                tf.ragged.constant(self.indata.systgroupidxs, dtype=tf.int32), 
+                fn_output_signature=tf.TensorSpec(shape=(dexpdtheta0_squared.shape[0],), dtype=tf.float64)
+            )
+
+            impacts = tf.sqrt(dexpdtheta0_squared)
+            impacts_grouped = tf.transpose(impacts_grouped)
+
+            # stat global impact from all unconstrained parameters, not sure if this is correct TODO: check
+            impacts_stat = tf.sqrt(tf.linalg.diag_part(expcov_noBBB) - tf.reduce_sum(dexpdtheta0_squared, axis=-1))
+            impacts_stat = tf.reshape(impacts_stat, (-1, 1))
+            impacts_grouped = tf.concat([impacts_grouped, impacts_stat], axis=1)
+
+            if self.binByBinStat:
+                impacts_BBB_stat = tf.sqrt(tf.linalg.diag_part(exp_cov_BBB))
+                impacts_BBB_stat = tf.reshape(impacts_BBB_stat, (-1, 1))
+                impacts_grouped = tf.concat([impacts_grouped, impacts_BBB_stat], axis=1)
         else:
-            var = tf.linalg.diag_part(cov)
-            var = tf.reshape(var, expected.shape)
-            return expected, var
+            impacts = None
+            impacts_grouped = None
+
+        expvar = tf.linalg.diag_part(expcov)
+        expvar = tf.reshape(expvar, expected.shape)
+
+        return expected, expvar, expcov, impacts, impacts_grouped
 
     @tf.function
     def _expvariations(self, fun_exp, cov, correlations):
@@ -822,32 +884,33 @@ class Fitter:
             return normfullcentral
 
     @tf.function
-    def expected_with_variance(self, fun, cov, profile=True):
+    def expected_with_variance(self, fun, cov, compute_cov=False, compute_global_impacts=False, profile=True):
         if profile:
-            return self._expvar_profiled(fun, cov)
+            return self._expvar_profiled(fun, cov, compute_cov, compute_global_impacts)
         else:
-            return self._expvar(fun, cov)
+            return self._expvar(fun, cov, compute_cov, compute_global_impacts)
 
     @tf.function
     def expected_variations(self, fun, cov, correlations=False):
         return self._expvariations(fun, cov, correlations=correlations)
 
-    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, hist_cov=False, name=None, label=None):
+    def expected_hists(self, cov=None, inclusive=True, compute_variance=True, compute_cov=False, compute_global_impacts=False, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, aux_info=False, name=None, label=None):
 
         def fun():
             return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
 
-        if compute_variance and compute_variations:
+        if compute_variations and (compute_variance or compute_cov or compute_global_impacts):
             raise NotImplementedError()
 
-        if compute_variance:
-            exp, var = self.expected_with_variance(fun, cov, profile=profile)
+        if compute_cov or compute_variance or compute_global_impacts:
+            exp, expvar, expcov, exp_impacts, exp_impacts_grouped = self.expected_with_variance(fun, cov, compute_cov=compute_variance, compute_global_impacts=compute_global_impacts, profile=profile)
         elif compute_variations:
             exp = self.expected_variations(fun, cov, correlations=correlated_variations)
         else:
             exp = tf.function(fun)()
 
         hists = {}
+        aux_dict = {}
 
         var_axes = []
         if compute_variations:
@@ -867,41 +930,64 @@ class Fitter:
             if not inclusive:
                 hist_axes.append(self.indata.axis_procs)
 
-            shape = tuple([len(a) for a in [*hist_axes, *var_axes]])
-
-            h = hist.Hist(*hist_axes, *var_axes, storage=hist.storage.Weight(), name=f"name_{channel}", label=label)
-            h.values()[...] = memoryview(tf.reshape(exp[start:stop], shape))
+            h = hist.Hist(*hist_axes, *var_axes, storage=hist.storage.Weight(), name=f"{name}_{channel}", label=label)
+            h.values()[...] = memoryview(tf.reshape(exp[start:stop], h.shape))
             if compute_variance:
-                h.variances()[...] = memoryview(tf.reshape(var[start:stop], shape))
+                h.variances()[...] = memoryview(tf.reshape(expvar[start:stop], h.shape))
             else:
                 h.variances()[...] = 0.
             hists[channel] = narf.ioutils.H5PickleProxy(h)
 
-        if compute_chi2 or hist_cov:
+            if compute_global_impacts:
+                if "hist_global_impacts" not in aux_dict.keys():
+                    aux_dict["hist_global_impacts"] = {}
+                    aux_dict["hist_global_impacts_grouped"] = {}
+
+                axis_impacts = self.indata.getImpactsAxes()
+                axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
+
+                h_impacts = hist.Hist(*hist_axes, axis_impacts, storage=hist.storage.Double(), name=f"{name}_{channel}", label=label)
+                h_impacts.values()[...] = memoryview(tf.reshape(exp_impacts[start:stop], h_impacts.shape))
+                h_impacts = narf.ioutils.H5PickleProxy(h_impacts)
+
+                h_impacts_grouped = hist.Hist(*hist_axes, axis_impacts_grouped, storage=hist.storage.Double(), name=f"{name}_{channel}", label=label)
+                h_impacts_grouped.values()[...] = memoryview(tf.reshape(exp_impacts_grouped[start:stop], h_impacts_grouped.shape))
+                h_impacts_grouped = narf.ioutils.H5PickleProxy(h_impacts_grouped)
+
+                aux_dict["hist_global_impacts"][channel] = h_impacts
+                aux_dict["hist_global_impacts_grouped"][channel] = h_impacts_grouped
+
+        if compute_cov:
+            # flat axes for covariance matrix, since it can go across channels
+            flat_axis_x = hist.axis.Integer(0, expcov.shape[0], underflow=False, overflow=False, name="x")
+            flat_axis_y = hist.axis.Integer(0, expcov.shape[1], underflow=False, overflow=False, name="y")
+
+            h_expcov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
+            h_expcov.values()[...] = memoryview(expcov)
+            h_expcov = narf.ioutils.H5PickleProxy(h_expcov)
+            aux_dict["hist_cov"] = h_expcov
+
+        if compute_chi2:
             def fun_residual():
                 return fun() - self.nobs
 
             if profile:
-                res, rescov = self._expvar_profiled(fun_residual, cov, compute_cov=True)
+                res, resvar, rescov, _1, _2 = self._expvar_profiled(fun_residual, cov, compute_cov=True)
             else:
-                res, rescov = self._expvar(fun_residual, cov, compute_cov=True)
+                res, resvar, rescov, _1, _2 = self._expvar(fun_residual, cov, compute_cov=True)
 
             chi2val = self.chi2(res, rescov).numpy()
             ndf = tf.size(exp).numpy() - self.normalize
 
-            # flat axes for covariance matrix, since it can go across channels
-            flat_axis_x = hist.axis.Integer(0, rescov.shape[0], underflow=False, overflow=False, name="x")
-            flat_axis_y = hist.axis.Integer(0, rescov.shape[1], underflow=False, overflow=False, name="y")
+            aux_dict["ndf"] = ndf
+            aux_dict["chi2"] = chi2val
 
-            h_rescov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
-            h_rescov.values()[...] = memoryview(rescov)
-            h_rescov = narf.ioutils.H5PickleProxy(h_rescov)
-
-            return hists, h_rescov, chi2val, ndf
+        if aux_info:
+            return hists, aux_dict
         else:
             return hists
 
-    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, hist_cov=False, name=None, label=None):
+    def expected_projection_hist(self, channel, axes, cov=None, inclusive=True, compute_variance=True, compute_cov=False, compute_global_impacts=False, compute_variations=False, correlated_variations=False, profile=True, profile_grad=True, compute_chi2=False, aux_info=False, name=None, label=None):
 
         def fun():
             return self._compute_yields(inclusive=inclusive, profile=profile, profile_grad=profile_grad)
@@ -957,11 +1043,11 @@ class Fitter:
 
         projection_fun = make_projection_fun(fun)
 
-        if compute_variance and compute_variations:
+        if compute_variations and (compute_variance or compute_cov or compute_global_impacts):
             raise NotImplementedError()
 
-        if compute_variance:
-            exp, var = self.expected_with_variance(projection_fun, cov, profile=profile)
+        if (compute_variance or compute_cov or compute_global_impacts):
+            exp, expvar, expcov, exp_impacts, exp_impacts_grouped = self.expected_with_variance(projection_fun, cov, compute_cov=compute_cov, compute_global_impacts=compute_global_impacts, profile=profile)
         elif compute_variations:
             exp = self.expected_variations(projection_fun, cov, correlations=correlated_variations)
         else:
@@ -970,34 +1056,58 @@ class Fitter:
         h = hist.Hist(*hist_axes, *var_axes, storage=hist.storage.Weight(), name=name, label=label)
         h.values()[...] = memoryview(exp)
         if compute_variance:
-            h.variances()[...] = memoryview(var)
+            h.variances()[...] = memoryview(expvar)
         else:
             h.variances()[...] = 0.
         h = narf.ioutils.H5PickleProxy(h)
 
-        if compute_chi2 or hist_cov:
+        aux_dict = {}
+
+        if compute_global_impacts:
+
+            axis_impacts = self.indata.getImpactsAxes()
+            axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
+
+            h_impacts = hist.Hist(*hist_axes, axis_impacts, storage=hist.storage.Double(), name=name, label=label)
+            h_impacts.values()[...] = memoryview(tf.reshape(exp_impacts[start:stop], h_impacts.shape))
+            h_impacts = narf.ioutils.H5PickleProxy(h_impacts)
+
+            h_impacts_grouped = hist.Hist(*hist_axes, axis_impacts_grouped, storage=hist.storage.Double(), name=name, label=label)
+            h_impacts_grouped.values()[...] = memoryview(tf.reshape(exp_impacts_grouped[start:stop], h_impacts_grouped.shape))
+            h_impacts_grouped = narf.ioutils.H5PickleProxy(h_impacts_grouped)
+
+            aux_dict["hist_global_impacts"] = h_impacts
+            aux_dict["hist_global_impacts_grouped"] = h_impacts_grouped
+
+        if compute_cov:
+            # flat axes for covariance matrix, since it can go across channels
+            flat_axis_x = hist.axis.Integer(0, expcov.shape[0], underflow=False, overflow=False, name="x")
+            flat_axis_y = hist.axis.Integer(0, expcov.shape[1], underflow=False, overflow=False, name="y")
+
+            h_expcov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
+            h_expcov.values()[...] = memoryview(expcov)
+            h_expcov = narf.ioutils.H5PickleProxy(h_rescov)
+            aux_dict["hist_cov"] = h_expcov
+
+        if compute_chi2:
             def fun_residual():
                 return fun() - self.nobs
 
             projection_fun_residual = make_projection_fun(fun_residual)
 
             if profile:
-                res, rescov = self._expvar_profiled(projection_fun_residual, cov, compute_cov=True)
+                res, resvar, rescov, _1, _2 = self._expvar_profiled(projection_fun_residual, cov, compute_cov=True)
             else:
-                res, rescov = self._expvar(projection_fun_residual, cov, compute_cov=True)
+                res, resvar, rescov, _1, _2 = self._expvar(projection_fun_residual, cov, compute_cov=True)
 
             chi2val = self.chi2(res, rescov).numpy()
             ndf = tf.size(exp).numpy() - self.normalize
 
-            # flat axes for covariance matrix, since it can go across channels
-            flat_axis_x = hist.axis.Integer(0, rescov.shape[0], underflow=False, overflow=False, name="x")
-            flat_axis_y = hist.axis.Integer(0, rescov.shape[1], underflow=False, overflow=False, name="y")
+            aux_dict["ndf"] = ndf
+            aux_dict["chi2"] = chi2val
 
-            h_rescov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
-            h_rescov.values()[...] = memoryview(rescov)
-            h_rescov = narf.ioutils.H5PickleProxy(h_rescov)
-
-            return h, h_rescov, chi2val, ndf
+        if aux_info:
+            return h, aux_dict
         else:
             return h
 
