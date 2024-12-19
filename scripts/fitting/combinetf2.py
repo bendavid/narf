@@ -5,7 +5,6 @@ import tensorflow as tf
 import narf.combineutils
 import argparse
 import narf.ioutils
-import os
 
 import pdb
 
@@ -13,7 +12,8 @@ import pdb
 parser =  argparse.ArgumentParser()
 
 parser.add_argument("filename", help="filename of the main hdf5 input")
-parser.add_argument("-o","--output", default="fitresults.hdf5",  help="output file name")
+parser.add_argument("-o","--output", default="fitresults",  help="output file name")
+parser.add_argument("--outputFormat", default="narf", choices=["narf", "h5py"],  help="output file name")
 parser.add_argument("-t","--toys", default=-1, type=int, help="run a given number of toys, 0 fits the data, and -1 fits the asimov toy (the default)")
 parser.add_argument("--expectSignal", default=1., type=float, help="rate multiplier for signal expectation (used for fit starting values and for toys)")
 parser.add_argument("--POIMode", default="mu", help="mode for POI's")
@@ -38,7 +38,8 @@ parser.add_argument("--externalCovariance", default=False, action='store_true', 
 args = parser.parse_args()
 
 indata = narf.combineutils.FitInputData(args.filename, args.pseudoData)
-fitter = narf.combineutils.Fitter(indata, args)
+fitresult = narf.combineutils.Fitresult(args.outputFormat)
+fitter = narf.combineutils.Fitter(indata, args, fitresult)
 
 if args.toys == -1:
     fitter.nobs.assign(fitter.expected_events(profile=False))
@@ -61,11 +62,8 @@ if args.saveHists:
         channel = projection["channel"]
         axes = projection["axes"]
 
-        hist_data_obs = results["hist_data_obs"][channel].get().project(*axes)
-        hist_nobs = results["hist_nobs"][channel].get().project(*axes)
-
-        hist_data_obs = narf.ioutils.H5PickleProxy(hist_data_obs)
-        hist_nobs = narf.ioutils.H5PickleProxy(hist_nobs)
+        hist_data_obs = fitter.fitresult.project(results["hist_data_obs"][channel], axes)
+        hist_nobs = fitter.fitresult.project(results["hist_nobs"][channel], axes)
 
         projection.update({"hist_data_obs" : hist_data_obs,
                     "hist_nobs" : hist_nobs,})
@@ -402,6 +400,7 @@ if args.saveHists:
 
             projection["hist_postfit_variations_correlated"] = hist_postfit_variations_correlated
 
+
 # pass meta data into output file
 meta = {
     "meta_info" : narf.ioutils.make_meta_info_dict(args=args), 
@@ -410,12 +409,5 @@ meta = {
     "procs": fitter.indata.procs,
 }
 
-outfolder = os.path.dirname(args.output)
-if outfolder:
-    if not os.path.exists(outfolder):
-        print(f"Creating output folder {outfolder}")
-        os.makedirs(outfolder)
-    
-with h5py.File(args.output, "w") as fout:
-    narf.ioutils.pickle_dump_h5py("results", results, fout)
-    narf.ioutils.pickle_dump_h5py("meta", meta, fout)
+
+fitter.fitresult.write(args.output, results, meta)

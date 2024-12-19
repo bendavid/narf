@@ -6,6 +6,8 @@ import scipy
 import h5py
 import hist
 import narf.ioutils
+import os
+
 
 def maketensor(h5dset):
     if 'original_shape' in h5dset.attrs:
@@ -24,12 +26,33 @@ def maketensor(h5dset):
     atensor = tf.reshape(atensor, shape)
     return atensor
 
+
 def makesparsetensor(h5group):
     indices = maketensor(h5group['indices'])
     values = maketensor(h5group['values'])
     dense_shape = h5group.attrs['dense_shape']
 
     return tf.sparse.SparseTensor(indices, values, dense_shape)
+
+
+def hist_boost(name, axes, values, variances=None, label=None):
+    if not isinstance(axes, (list, tuple, np.ndarray)):
+        axes = [axes]
+    storage_type = hist.storage.Weight() if variances is not None else hist.storage.Double()
+    h = hist.Hist(*axes, storage=storage_type, name=name, label=label)
+    h.values()[...] = memoryview(tf.reshape(values, h.shape))
+    if variances is not None:
+        h.variances()[...] = memoryview(tf.reshape(variances, h.shape))
+    return h
+
+
+def hist_H5PickleProxy(*args, **kwargs):
+    return narf.ioutils.H5PickleProxy(hist_boost(*args, **kwargs))
+
+
+def load_H5PickleProxy(proxy):
+    return proxy.get()
+
 
 class FitInputData:
     def __init__(self, filename, pseudodata=None, normalize=False):
@@ -309,8 +332,50 @@ class FitDebugData:
 
         return nonzero_procs
 
+
+class Fitresult:
+    def __init__(self, output_format="narf"):
+        self.output_format = output_format
+
+        if output_format == "narf":
+            self.hist = hist_H5PickleProxy
+            self.pack = narf.ioutils.H5PickleProxy
+            self.unpack = load_H5PickleProxy
+            self.dump = narf.ioutils.pickle_dump_h5py
+            self.extension="hdf5"
+        elif output_format == "h5py":
+            self.hist = hist_boost
+            self.pack = lambda x: x
+            self.unpack = lambda x: x
+            self.dump = lambda name, obj, fout: fout.create_dataset(name, obj)
+            self.extension="h5"
+            raise NotImplementedError(f"Writing to vanilla h5py is under development and not yet supported")
+        else:
+            raise ValueError(f"Unknown output format {output_format}")
+
+    def project(self, h, axes):
+        h = self.unpack(h).project(*axes)
+        return self.pack(h)
+
+    def write(self, output, results, meta={}):
+        outfolder = os.path.dirname(output)
+        if outfolder:
+            if not os.path.exists(outfolder):
+                print(f"Creating output folder {outfolder}")
+                os.makedirs(outfolder)
+
+        if '.' not in output and output.split('.')[-1]:
+            output += f".{self.extension}"
+
+        print(f"Write output file {output}")
+
+        with h5py.File(output, "w") as fout:
+            self.dump("results", results, fout)
+            self.dump("meta", meta, fout)
+
+
 class Fitter:
-    def __init__(self, indata, options):
+    def __init__(self, indata, options, fitresult=None):
         self.indata = indata
         self.binByBinStat = options.binByBinStat
         self.normalize = options.normalize
@@ -384,6 +449,9 @@ class Fitter:
         nexpfullcentral = self.expected_events(profile=False)
         self.nexpnom = tf.Variable(nexpfullcentral, trainable=False, name="nexpnom")
 
+        self.fitresult = Fitresult() if fitresult is None else fitresult
+        self.hist = self.fitresult.hist
+
     def prefit_covariance(self, unconstrained_err=0.):
         # free parameters are taken to have zero uncertainty for the purposes of prefit uncertainties
         var_poi = tf.zeros([self.npoi], dtype=self.indata.dtype)
@@ -418,21 +486,16 @@ class Fitter:
         values = self.x.numpy()
         variances = tf.linalg.diag_part(cov)
 
-        h = hist.Hist(axis_parms, storage=hist.storage.Weight(), name=hist_name)
-        h.values()[...] = memoryview(values)
-        h.variances()[...] = memoryview(variances)
-        h = narf.ioutils.H5PickleProxy(h)
+        h = self.hist(hist_name, axis_parms, values=values, variances=variances)
 
         return h
 
-    def cov_hist(self, cov):
+    def cov_hist(self, cov, hist_name="cov"):
         parms = list(self.parms.astype(str))
         axis_parms_x = hist.axis.StrCategory(parms, name="parms_x")
         axis_parms_y = hist.axis.StrCategory(parms, name="parms_y")
 
-        h_cov = hist.Hist(axis_parms_x, axis_parms_y, storage=hist.storage.Double(), name="cov")
-        h_cov.values()[...] = memoryview(cov)
-        h_cov = narf.ioutils.H5PickleProxy(h_cov)
+        h_cov = self.hist(hist_name, [axis_parms_x, axis_parms_y], values=cov)
 
         return h_cov
 
@@ -496,13 +559,8 @@ class Fitter:
         axis_impacts = self.indata.getImpactsAxes()
         axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
-        h = hist.Hist(axis_parms, axis_impacts, storage=hist.storage.Double(), name="impacts")
-        h.values()[...] = memoryview(impacts)
-        h = narf.ioutils.H5PickleProxy(h)
-
-        h_grouped = hist.Hist(axis_parms, axis_impacts_grouped, storage=hist.storage.Double(), name="impacts_grouped")
-        h_grouped.values()[...] = memoryview(impacts_grouped)
-        h_grouped = narf.ioutils.H5PickleProxy(h_grouped)
+        h = self.hist("impacts", [axis_parms, axis_impacts], values=impacts)
+        h_grouped = self.hist("impacts_grouped", [axis_parms, axis_impacts_groupe], values=impacts_grouped)
 
         return h, h_grouped
 
@@ -571,13 +629,8 @@ class Fitter:
         axis_impacts = self.indata.getImpactsAxes()
         axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
-        h = hist.Hist(axis_parms, axis_impacts, storage=hist.storage.Double(), name="global_impacts")
-        h.values()[...] = memoryview(impacts)
-        h = narf.ioutils.H5PickleProxy(h)
-
-        h_grouped = hist.Hist(axis_parms, axis_impacts_grouped, storage=hist.storage.Double(), name="global_impacts_grouped")
-        h_grouped.values()[...] = memoryview(impacts_grouped)
-        h_grouped = narf.ioutils.H5PickleProxy(h_grouped)
+        h = self.hist("global_impacts", [axis_parms, axis_impacts], values=impacts)
+        h_grouped = self.hist("global_impacts_grouped", [axis_parms, axis_impacts_grouped], values=impacts_grouped)
 
         return h, h_grouped
 
@@ -930,14 +983,14 @@ class Fitter:
             if not inclusive:
                 hist_axes.append(self.indata.axis_procs)
 
-            h = hist.Hist(*hist_axes, *var_axes, storage=hist.storage.Weight(), name=f"{name}_{channel}", label=label)
-            h.values()[...] = memoryview(tf.reshape(exp[start:stop], h.shape))
-            if compute_variance:
-                h.variances()[...] = memoryview(tf.reshape(expvar[start:stop], h.shape))
-            else:
-                h.variances()[...] = 0.
-            hists[channel] = narf.ioutils.H5PickleProxy(h)
-
+            hists[channel] = self.hist(
+                f"{name}_{channel}",
+                [*hist_axes, *var_axes],
+                values=exp[start:stop], 
+                variances=expvar[start:stop] if compute_variance else None,
+                label=label
+                )
+            
             if compute_global_impacts:
                 if "hist_global_impacts" not in aux_dict.keys():
                     aux_dict["hist_global_impacts"] = {}
@@ -946,13 +999,18 @@ class Fitter:
                 axis_impacts = self.indata.getImpactsAxes()
                 axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
-                h_impacts = hist.Hist(*hist_axes, axis_impacts, storage=hist.storage.Double(), name=f"{name}_{channel}", label=label)
-                h_impacts.values()[...] = memoryview(tf.reshape(exp_impacts[start:stop], h_impacts.shape))
-                h_impacts = narf.ioutils.H5PickleProxy(h_impacts)
-
-                h_impacts_grouped = hist.Hist(*hist_axes, axis_impacts_grouped, storage=hist.storage.Double(), name=f"{name}_{channel}", label=label)
-                h_impacts_grouped.values()[...] = memoryview(tf.reshape(exp_impacts_grouped[start:stop], h_impacts_grouped.shape))
-                h_impacts_grouped = narf.ioutils.H5PickleProxy(h_impacts_grouped)
+                h_impacts = self.hist(
+                    f"{name}_{channel}", 
+                    [*hist_axes, axis_impacts], 
+                    values=exp_impacts[start:stop], 
+                    label=label,
+                    )
+                h_impacts_grouped = self.hist(
+                    f"{name}_{channel}", 
+                    [*hist_axes, axis_impacts_grouped], 
+                    values=exp_impacts_grouped[start:stop], 
+                    label=label,
+                    )
 
                 aux_dict["hist_global_impacts"][channel] = h_impacts
                 aux_dict["hist_global_impacts_grouped"][channel] = h_impacts_grouped
@@ -962,9 +1020,7 @@ class Fitter:
             flat_axis_x = hist.axis.Integer(0, expcov.shape[0], underflow=False, overflow=False, name="x")
             flat_axis_y = hist.axis.Integer(0, expcov.shape[1], underflow=False, overflow=False, name="y")
 
-            h_expcov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
-            h_expcov.values()[...] = memoryview(expcov)
-            h_expcov = narf.ioutils.H5PickleProxy(h_expcov)
+            h_expcov = self.hist(f"{name}_cov", [flat_axis_x, flat_axis_y], values=expcov, label=f"{label} covariance")
             aux_dict["hist_cov"] = h_expcov
 
         if compute_chi2:
@@ -1053,13 +1109,13 @@ class Fitter:
         else:
             exp = tf.function(projection_fun)()
 
-        h = hist.Hist(*hist_axes, *var_axes, storage=hist.storage.Weight(), name=name, label=label)
-        h.values()[...] = memoryview(exp)
-        if compute_variance:
-            h.variances()[...] = memoryview(expvar)
-        else:
-            h.variances()[...] = 0.
-        h = narf.ioutils.H5PickleProxy(h)
+        h = self.hist(
+            name, 
+            [*hist_axes, *var_axes], 
+            values=exp, 
+            variances=expvar if compute_variance else None, 
+            label=label,
+            )
 
         aux_dict = {}
 
@@ -1068,13 +1124,8 @@ class Fitter:
             axis_impacts = self.indata.getImpactsAxes()
             axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
-            h_impacts = hist.Hist(*hist_axes, axis_impacts, storage=hist.storage.Double(), name=name, label=label)
-            h_impacts.values()[...] = memoryview(tf.reshape(exp_impacts[start:stop], h_impacts.shape))
-            h_impacts = narf.ioutils.H5PickleProxy(h_impacts)
-
-            h_impacts_grouped = hist.Hist(*hist_axes, axis_impacts_grouped, storage=hist.storage.Double(), name=name, label=label)
-            h_impacts_grouped.values()[...] = memoryview(tf.reshape(exp_impacts_grouped[start:stop], h_impacts_grouped.shape))
-            h_impacts_grouped = narf.ioutils.H5PickleProxy(h_impacts_grouped)
+            h_impacts = self.hist(name, [*hist_axes, axis_impacts], values=exp_impacts[start:stop], label=label)
+            h_impacts_grouped = self.hist(name, [*hist_axes, axis_impacts_grouped], values=exp_impacts_grouped[start:stop], label=label)
 
             aux_dict["hist_global_impacts"] = h_impacts
             aux_dict["hist_global_impacts_grouped"] = h_impacts_grouped
@@ -1084,9 +1135,8 @@ class Fitter:
             flat_axis_x = hist.axis.Integer(0, expcov.shape[0], underflow=False, overflow=False, name="x")
             flat_axis_y = hist.axis.Integer(0, expcov.shape[1], underflow=False, overflow=False, name="y")
 
-            h_expcov = hist.Hist(flat_axis_x, flat_axis_y, storage=hist.storage.Double(), name=f"{name}_cov", label=f"{label} covariance")
-            h_expcov.values()[...] = memoryview(expcov)
-            h_expcov = narf.ioutils.H5PickleProxy(h_rescov)
+            h_expcov = self.hist(f"{name}_cov", [flat_axis_x, flat_axis_y], values=expcov, label=f"{label} covariance")
+
             aux_dict["hist_cov"] = h_expcov
 
         if compute_chi2:
@@ -1121,17 +1171,8 @@ class Fitter:
             start = info["start"]
             stop = info["stop"]
 
-            shape = tuple([len(a) for a in axes])
-
-            hist_data_obs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "data_obs", label="observed number of events in data")
-            hist_data_obs.values()[...] = memoryview(tf.reshape(self.indata.data_obs[start:stop], shape))
-            hist_data_obs.variances()[...] = hist_data_obs.values()
-            hists_data_obs[channel] = narf.ioutils.H5PickleProxy(hist_data_obs)
-
-            hist_nobs = hist.Hist(*axes, storage=hist.storage.Weight(), name = "nobs", label = "observed number of events for fit")
-            hist_nobs.values()[...] = memoryview(tf.reshape(self.nobs.value()[start:stop], shape))
-            hist_nobs.variances()[...] = hist_nobs.values()
-            hists_nobs[channel] = narf.ioutils.H5PickleProxy(hist_nobs)
+            hists_data_obs[channel] = self.hist("data_obs", axes, values=self.indata.data_obs[start:stop], label="observed number of events in data")
+            hists_nobs[channel] = self.hist("nobs", axes, values=self.nobs.value()[start:stop], label = "observed number of events for fit")
 
         return hists_data_obs, hists_nobs
 
