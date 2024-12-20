@@ -38,8 +38,8 @@ parser.add_argument("--externalCovariance", default=False, action='store_true', 
 args = parser.parse_args()
 
 indata = narf.combineutils.FitInputData(args.filename, args.pseudoData)
-fitresult = narf.combineutils.Fitresult(args.outputFormat)
-fitter = narf.combineutils.Fitter(indata, args, fitresult)
+workspace = narf.combineutils.Workspace(args.outputFormat)
+fitter = narf.combineutils.Fitter(indata, args, workspace)
 
 if args.toys == -1:
     fitter.nobs.assign(fitter.expected_events(profile=False))
@@ -62,8 +62,8 @@ if args.saveHists:
         channel = projection["channel"]
         axes = projection["axes"]
 
-        hist_data_obs = fitter.fitresult.project(results["hist_data_obs"][channel], axes)
-        hist_nobs = fitter.fitresult.project(results["hist_nobs"][channel], axes)
+        hist_data_obs = fitter.workspace.project(results["hist_data_obs"][channel], axes)
+        hist_nobs = fitter.workspace.project(results["hist_nobs"][channel], axes)
 
         projection.update({"hist_data_obs" : hist_data_obs,
                     "hist_nobs" : hist_nobs,})
@@ -138,9 +138,9 @@ if args.saveHists:
             "hist_prefit_inclusive" : hist_prefit_inclusive,
             "hist_prefit" : hist_prefit
         })
-    if not args.noChi2:
-        projection["ndf_prefit"] = aux_info["ndf"]
-        projection["chi2_prefit"] = aux_info["chi2"]
+        if not args.noChi2:
+            projection["ndf_prefit"] = aux_info["ndf"]
+            projection["chi2_prefit"] = aux_info["chi2"]
 
     if args.computeVariations:
         cov_prefit_variations = fitter.prefit_covariance(unconstrained_err=1.)
@@ -410,4 +410,4 @@ meta = {
 }
 
 
-fitter.fitresult.write(args.output, results, meta)
+fitter.workspace.write(args.output, results, meta)

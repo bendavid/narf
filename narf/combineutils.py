@@ -333,7 +333,7 @@ class FitDebugData:
         return nonzero_procs
 
 
-class Fitresult:
+class Workspace:
     def __init__(self, output_format="narf"):
         self.output_format = output_format
 
@@ -375,7 +375,7 @@ class Fitresult:
 
 
 class Fitter:
-    def __init__(self, indata, options, fitresult=None):
+    def __init__(self, indata, options, workspace=None):
         self.indata = indata
         self.binByBinStat = options.binByBinStat
         self.normalize = options.normalize
@@ -449,8 +449,8 @@ class Fitter:
         nexpfullcentral = self.expected_events(profile=False)
         self.nexpnom = tf.Variable(nexpfullcentral, trainable=False, name="nexpnom")
 
-        self.fitresult = Fitresult() if fitresult is None else fitresult
-        self.hist = self.fitresult.hist
+        self.workspace = Workspace() if workspace is None else workspace
+        self.hist = self.workspace.hist
 
     def prefit_covariance(self, unconstrained_err=0.):
         # free parameters are taken to have zero uncertainty for the purposes of prefit uncertainties
@@ -560,7 +560,7 @@ class Fitter:
         axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
         h = self.hist("impacts", [axis_parms, axis_impacts], values=impacts)
-        h_grouped = self.hist("impacts_grouped", [axis_parms, axis_impacts_groupe], values=impacts_grouped)
+        h_grouped = self.hist("impacts_grouped", [axis_parms, axis_impacts_grouped], values=impacts_grouped)
 
         return h, h_grouped
 
