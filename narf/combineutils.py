@@ -87,6 +87,7 @@ class FitInputData:
             self.sparse = not 'hnorm' in f
 
             if self.sparse:
+                print("WARNING: The sparse tensor implementation is experimental and probably slower than with a dense tensor!")
                 hnorm_sparse = f['hnorm_sparse']
                 hlogk_sparse = f['hlogk_sparse']
             else:
@@ -197,7 +198,11 @@ class FitInputData:
                 self.norm = self.norm * (data_sum / norm_sum)[None, None, ...]
     
     def getImpactsAxes(self):
-        impact_names = list(self.systs.astype(str))
+        impact_names = list(self.signals.astype(str)) + list(self.systs.astype(str))
+        return hist.axis.StrCategory(impact_names, name="impacts")
+
+    def getGlobalImpactsAxes(self):
+        impact_names = list(self.systs.astype(str)[self.nsystnoconstraint:])
         return hist.axis.StrCategory(impact_names, name="impacts")
 
     def getImpactsAxesGrouped(self, bin_by_bin_stat=False):
@@ -614,7 +619,10 @@ class Fitter:
             impacts_bbb = tf.reshape(impacts_bbb, (-1, 1))
             impacts_grouped = tf.concat([impacts_grouped, impacts_bbb], axis=1)
 
-        return dxdtheta0, impacts_grouped
+        # global impacts of unconstrained parameters are always 0, only store impacts of constrained ones
+        impacts = dxdtheta0[:,self.indata.nsystnoconstraint:]
+
+        return impacts, impacts_grouped
 
     def global_impacts_hists(self, cov):
         # store impacts for all POIs and unconstrained nuisances
@@ -626,7 +634,7 @@ class Fitter:
 
         # write out histograms
         axis_parms = hist.axis.StrCategory(parms, name="parms")
-        axis_impacts = self.indata.getImpactsAxes()
+        axis_impacts = self.indata.getGlobalImpactsAxes()
         axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
         h = self.hist("global_impacts", [axis_parms, axis_impacts], values=impacts)
@@ -687,7 +695,9 @@ class Fitter:
                 fn_output_signature=tf.TensorSpec(shape=(dexpdtheta0_squared.shape[0],), dtype=tf.float64)
             )
 
-            impacts = dexpdtheta0
+            # global impacts of unconstrained parameters are always 0, only store impacts of constrained ones
+            impacts = dexpdtheta0[:,self.indata.nsystnoconstraint:]
+
             impacts_grouped = tf.transpose(impacts_grouped)
 
             if compute_cov:
@@ -773,6 +783,7 @@ class Fitter:
 
         if compute_global_impacts:
             #FIXME This is not correct
+            print("WARNING: Global impacts on observables without profiling is under development and probably wrong!")
 
             dxdtheta0, dxdnobs, dxdbeta0 = self._global_impacts(invhess)
             dexpdtheta0 = pdexpdx @ dxdtheta0
@@ -789,7 +800,9 @@ class Fitter:
                 fn_output_signature=tf.TensorSpec(shape=(dexpdtheta0_squared.shape[0],), dtype=tf.float64)
             )
 
-            impacts = tf.sqrt(dexpdtheta0_squared)
+            # global impacts of unconstrained parameters are always 0, only store impacts of constrained ones
+            impacts = dexpdtheta0[:,self.indata.nsystnoconstraint:]
+
             impacts_grouped = tf.transpose(impacts_grouped)
 
             # stat global impact from all unconstrained parameters, not sure if this is correct TODO: check
@@ -996,7 +1009,7 @@ class Fitter:
                     aux_dict["hist_global_impacts"] = {}
                     aux_dict["hist_global_impacts_grouped"] = {}
 
-                axis_impacts = self.indata.getImpactsAxes()
+                axis_impacts = self.indata.getGlobalImpactsAxes()
                 axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
                 h_impacts = self.hist(
@@ -1121,7 +1134,7 @@ class Fitter:
 
         if compute_global_impacts:
 
-            axis_impacts = self.indata.getImpactsAxes()
+            axis_impacts = self.indata.getGlobalImpactsAxes()
             axis_impacts_grouped = self.indata.getImpactsAxesGrouped(self.binByBinStat)
 
             h_impacts = self.hist(name, [*hist_axes, axis_impacts], values=exp_impacts[start:stop], label=label)
