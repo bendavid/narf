@@ -12,7 +12,7 @@ import datetime
 import subprocess
 import os, sys
 import re
-from narf import common
+import pathlib
 
 MIN_PROTOCOL_VERSION = 1
 CURRENT_PROTOCOL_VERSION = 1
@@ -319,7 +319,7 @@ def script_command_to_str(argv, parser_args):
             call_args[select] = np.vectorize(lambda x: f"'{x}'")(call_args[select])
     return " ".join([argv[0], *call_args])
 
-def make_meta_info_dict(exclude_diff = 'notebooks', args = None, wd = common.base_dir):
+def make_meta_info_dict(exclude_diff = 'notebooks', args = None, wd = f"{pathlib.Path(__file__).parent}/../"):
     meta_data = {
         "time" : str(datetime.datetime.now()), 
         "command" : script_command_to_str(sys.argv, args),
