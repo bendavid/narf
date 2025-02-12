@@ -1,5 +1,4 @@
 import tensorflow as tf
-import tensorflow_io as tfio
 import numpy as np
 import scipy
 import h5py
@@ -21,11 +20,19 @@ def maketensor(h5dset):
     if h5dset.size == 0:
         return tf.zeros(shape,h5dset.dtype)
 
-    filename = h5dset.file.filename
-    dsetpath = h5dset.name
+    # read directly from hdf5 dataset to the underlying buffer of a tensor
+    # this requires that the tensor is located on the CPU, so force the device
+    with tf.device(tf.config.list_logical_devices("CPU")[0]):
+        atensor = tf.zeros(h5dset.shape, h5dset.dtype)
+        # zero tensors have a special flag set, using the identity clears this implicitly
+        atensor = tf.identity(atensor)
 
-    atensor = tfio.IOTensor.from_hdf5(filename)(dsetpath).to_tensor()
+    # read into the underlying array
+    h5dset.read_direct(atensor.__array__())
 
+    # the reshape operation is needed in case the hdf5 dataset was flattened
+    # this also triggers a copy of the tensor to the default device (e.g. GPU)
+    # if needed (ie if not the default CPU device)
     atensor = tf.reshape(atensor, shape)
     return atensor
 
