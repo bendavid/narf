@@ -1,6 +1,6 @@
 import ROOT
 from .lumitools import make_lumihelper, make_jsonhelper
-from .ioutils import H5PickleProxy
+from wums.ioutils import H5PickleProxy
 import time
 import uuid
 import sys
