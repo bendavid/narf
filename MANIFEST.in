@@ -1,8 +1,0 @@
-# Include specific files or directories
-exclude narf/*
-exclude datasets/*
-exclude scripts/fitting/*
-exclude scripts/test/*
-
-include narf/ioutils.py
-include doc/ioutils.md
