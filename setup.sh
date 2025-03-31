@@ -6,11 +6,6 @@ export XRD_PARALLELEVTLOOP="16"
 # prevent Eigen from spawning spurious threads
 export OMP_NUM_THREADS="1"
 
-# workaround for bug in tf lite
-# (note that this is fixed from v24 of the cmswmass singularity image by patching tensorflow
-# but keeping this doesn't do any harm)
-export TF_NUM_INTEROP_THREADS="1"
-
 #workaround for lock contention issue in tflite
 export TF_ENABLE_ONEDNN_OPTS="0"
 export TF_DISABLE_MKL="1"
