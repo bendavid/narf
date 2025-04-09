@@ -10,4 +10,10 @@ export OMP_NUM_THREADS="1"
 export TF_ENABLE_ONEDNN_OPTS="0"
 export TF_DISABLE_MKL="1"
 
+# openblas doesn't scale well beyond 64 threads currently (v0.3.29)
+# so set the number of threads to min(64, ncpus)
+# note that --all is needed because otherwise nproc keys on
+# OMP_NUM_THREADS set above and would return 1
+export OPENBLAS_NUM_THREADS=$((`nproc --all`>64 ? 64 : `nproc --all`))
+
 echo "Created environment variable NARF_BASE=${NARF_BASE}"
