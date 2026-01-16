@@ -172,10 +172,10 @@ namespace narf {
     public:
 
       using iterator_category = std::forward_iterator_tag;
-      using value_type = value_iterator_t::value_type;
-      using difference_type = value_iterator_t::difference_type;
-      using pointer = value_iterator_t::pointer;
-      using reference = value_iterator_t::reference;
+      using value_type = typename value_iterator_t::value_type;
+      using difference_type = typename value_iterator_t::difference_type;
+      using pointer = typename value_iterator_t::pointer;
+      using reference = typename value_iterator_t::reference;
 
       iterator(HIST &hist, std::size_t idx) : indices_(unlinearize_index(hist, idx)),
         indices_begin_(HIST::multi_index_type::create(hist.rank())),
@@ -582,6 +582,62 @@ namespace narf {
   template<typename HIST, typename... Xs>
   auto const &get_value(const HIST &hist, const Xs&... xs) {
       return get_value_impl(hist, std::index_sequence_for<Xs...>{}, xs...);
+  }
+
+  // Helper which holds a histogram and facilitates bin content lookup
+  // RDataFrame still needs explicit non-templated operator() arguments for now
+  template <typename Storage, typename... Axes>
+  class HistHelper {
+  protected:
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+
+  public:
+    HistHelper(hist_t &&resource) : resourceHist_(std::make_shared<const hist_t>(std::move(resource))) {}
+
+    double operator()(const boost::histogram::axis::traits::value_type<Axes>&... args) {
+      return narf::get_value(*resourceHist_, args...);
+    }
+
+  protected:
+    std::shared_ptr<const hist_t> resourceHist_;
+  };
+
+  // CTAD doesn't work reliably from cppyy so add factory function
+  template <typename Storage, typename... Axes>
+  HistHelper<Storage, Axes...> make_hist_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+    return HistHelper(std::forward<hist_t>(h));
+  }
+
+  // Helper which facilitates conversion from value to quantile for a single variable
+  // The underlying histogram holds a tensor with the bin edges for the quantiles in the last variable,
+  // conditional on all the previous variables
+  template <typename Storage, typename... Axes>
+  class QuantileHelper : public HistHelper<Storage, Axes...> {
+    using base_t = HistHelper<Storage, Axes...>;
+    using hist_t = typename base_t::hist_t;
+    using scalar_t = typename Storage::value_type::tensor_t::Scalar;
+    static constexpr auto nquants = Storage::value_type::size;
+
+  public:
+    QuantileHelper(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
+
+    boost::histogram::axis::index_type operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) {
+      auto const &hist = *base_t::resourceHist_;
+      auto const &edges = narf::get_value(hist, args...).data();
+
+      // find the quantile bin corresponding to the last argument
+      auto const upper = std::upper_bound(edges.data(), edges.data()+nquants, last);
+      auto const iquant = std::distance(edges.data(), upper);
+      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, nquants-1);
+    }
+  };
+
+  // CTAD doesn't work reliably from cppyy so add factory function
+  template <typename Storage, typename... Axes>
+  QuantileHelper<Storage, Axes...> make_quantile_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+    return QuantileHelper<Storage, Axes...>(std::forward<hist_t>(h));
   }
 
 }
