@@ -10,6 +10,7 @@ import uuid
 import array
 import cppyy.ll
 import narf.clingutils
+import awkward as ak
 
 narf.clingutils.Declare('#include "histutils.hpp"')
 narf.clingutils.Declare('#include "FillBoostHelperAtomic.hpp"')
@@ -638,3 +639,111 @@ def pythonize_rdataframe(klass):
     klass.Histo3DWithBoost = _histo3d_with_boost
     klass.HistoNDWithBoost = _histond_with_boost
     klass.SumAndCount = _sum_and_count
+
+def build_quantile_hists(df, cols, condaxes, quantaxes):
+    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantile_ints"""
+
+    arraxes = condaxes + quantaxes
+
+    ncond = len(condaxes)
+    nquant = len(quantaxes)
+
+    condcols = cols[:ncond]
+    quantcols = cols[ncond:]
+
+    if ncond > 0:
+        hist_cond = df.HistoBoost("hist_cond", condaxes, condcols, storage=hist.storage.Int64())
+
+    # from_rdataframe is not lazy and immediately triggers an event loop, so it has to go last
+    arr = ak.from_rdataframe(df, cols)
+
+    if ncond > 0:
+        hist_cond = hist_cond.GetValue()
+
+    # for axis in hist_cond.axes:
+        # print(hist_cond.project(axis.name))
+
+    shape_final = [axis.extent for axis in arraxes]
+
+    arr = arr[None, ...]
+
+    quantile_integer_axes = []
+    quantile_hists = []
+
+
+    for iax, (col, axis) in enumerate(zip(cols, arraxes)):
+        sortidxs = ak.argsort(arr[..., col], axis=-1, stable=False)
+        arr = arr[sortidxs]
+
+        if col in condcols:
+            projnames = [axis.name for axis in condaxes[:iax+1]]
+            hcondpartial = hist_cond.project(*projnames)
+
+            quantile_counts = hcondpartial.values(flow=True)
+            quantile_counts = np.ravel(quantile_counts)
+
+        else:
+            counts = ak.num(arr[..., col], axis=-1)
+            quantile_counts_cumulative = axis.edges*counts[:, None]
+
+            quantile_counts_cumulative = ak.values_astype(np.rint(quantile_counts_cumulative), np.int64)
+            quantile_counts = quantile_counts_cumulative[..., 1:] - quantile_counts_cumulative[..., :-1]
+            quantile_counts = ak.flatten(quantile_counts, axis=None)
+
+        arr = ak.flatten(arr, axis=1)
+        arr = ak.unflatten(arr, quantile_counts, axis=0)
+
+        if col in quantcols:
+            quantile_edges = ak.max(arr[..., col], axis=-1, mask_identity=False)
+            quantile_edges = np.reshape(quantile_edges, shape_final[:iax+1])
+            quantile_edges = ak.to_numpy(quantile_edges)
+
+            # replace -infinity from empty values with the previous bin edge
+            # so that the quantile edges are at least still monotonic
+            nquants = quantile_edges.shape[-1]
+            for iquant in range(1, nquants):
+                quantile_edges[..., iquant] = np.where(quantile_edges[..., iquant]==-np.inf, quantile_edges[..., iquant-1], quantile_edges[..., iquant])
+
+            iquantax = iax - ncond
+
+            quantile_integer_axis = hist.axis.Integer(0, axis.size, underflow=False, overflow=False, name=f"{axis.name}_int")
+            quantile_integer_axes.append(quantile_integer_axis)
+
+            helper_axes = condaxes[:iax+1] + quantile_integer_axes
+
+            helper_hist = hist.Hist(*helper_axes)
+            helper_hist.values(flow=True)[...] = quantile_edges
+
+            quantile_hists.append(helper_hist)
+
+    return quantile_hists
+
+
+def define_quantile_ints(df, cols, quantile_hists):
+    """Define transformed columns corresponding to conditional quantile bins (integers)"""
+
+    ncols = len(cols)
+    nquant = len(quantile_hists)
+    ncond = ncols - nquant
+
+    condcols = cols[:ncond]
+    quantcols = cols[ncond:]
+
+    helper_cols_cond = condcols.copy()
+
+    for col, quantile_hist in zip(quantcols, quantile_hists):
+
+        helper_hist = narf.hist_to_pyroot_boost(quantile_hist, tensor_rank=1)
+        quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
+
+        helper_cols = helper_cols_cond + [col]
+        coltypes = [df.GetColumnType(helpercol) for helpercol in helper_cols]
+
+        outname = f"{col}_iquant"
+        df = df.Define(outname, quanthelper, helper_cols)
+        helper_cols_cond.append(outname)
+
+    quantile_axes = list(quantile_hists[-1].axes)
+    quantile_cols = helper_cols_cond
+
+    return df, quantile_axes, quantile_cols
