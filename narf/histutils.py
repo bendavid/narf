@@ -641,13 +641,7 @@ def pythonize_rdataframe(klass):
     klass.SumAndCount = _sum_and_count
 
 def build_quantile_hists(df, cols, condaxes, quantaxes):
-
-    print("build_quantile_hists")
-    print(df)
-    print(cols)
-    print(condaxes)
-    print(quantaxes)
-
+    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantile_ints"""
 
     arraxes = condaxes + quantaxes
 
@@ -656,13 +650,6 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
 
     condcols = cols[:ncond]
     quantcols = cols[ncond:]
-
-    print("condcols", condcols)
-    print("quantcols", quantcols)
-
-    # for ax in iqaxes:
-    #     print("size, extent", ax.size, ax.extent)
-    # quit()
 
     if ncond > 0:
         hist_cond = df.HistoBoost("hist_cond", condaxes, condcols, storage=hist.storage.Int64())
@@ -673,11 +660,8 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
     if ncond > 0:
         hist_cond = hist_cond.GetValue()
 
-
-
-    # hist_cond = hist.Hist(*condaxes, storage=hist.storage.Int64)
-    # hist_cond.fill(*[arr[..., col] for col in condcols])
-    print(hist_cond)
+    # for axis in hist_cond.axes:
+        # print(hist_cond.project(axis.name))
 
     shape_final = [axis.extent for axis in arraxes]
 
@@ -688,60 +672,30 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
 
 
     for iax, (col, axis) in enumerate(zip(cols, arraxes)):
-        print("iax", iax)
-
-        print("arr[:5]", arr[:5])
-
-        print("argsort")
         sortidxs = ak.argsort(arr[..., col], axis=-1, stable=False)
-        print("sort by index")
         arr = arr[sortidxs]
-        print("done sorting")
-        print("arr[:5]", arr[:5])
-
 
         if col in condcols:
             projnames = [axis.name for axis in condaxes[:iax+1]]
             hcondpartial = hist_cond.project(*projnames)
-            print("hcondpartial")
-            print(hcondpartial)
 
             quantile_counts = hcondpartial.values(flow=True)
             quantile_counts = np.ravel(quantile_counts)
 
         else:
             counts = ak.num(arr[..., col], axis=-1)
-            print("counts", counts)
-
-            # edges = axis.edges[*iax*[None], :]
-            # edges = axis.edges
-            # print("edge.shape", edges.shape)
             quantile_counts_cumulative = axis.edges*counts[:, None]
 
             quantile_counts_cumulative = ak.values_astype(np.rint(quantile_counts_cumulative), np.int64)
             quantile_counts = quantile_counts_cumulative[..., 1:] - quantile_counts_cumulative[..., :-1]
-            print("quantile_counts", quantile_counts)
-            # quantile_counts = ak.values_astype(np.rint(quantile_counts), np.int64)
             quantile_counts = ak.flatten(quantile_counts, axis=None)
 
-        print("quantile_counts", quantile_counts)
-
-        print("arr[:5]", arr[:5])
-        print(len(arr))
         arr = ak.flatten(arr, axis=1)
-        print("arr[:5]", arr[:5])
-        print(len(arr))
         arr = ak.unflatten(arr, quantile_counts, axis=0)
-        print("arr[:5]", arr[:5])
-        print(len(arr))
 
         if col in quantcols:
-            # quantile_edges = arr[..., 0, col]
             quantile_edges = ak.max(arr[..., col], axis=-1, mask_identity=False)
-            print("quantile_edges", quantile_edges)
             quantile_edges = np.reshape(quantile_edges, shape_final[:iax+1])
-            # print("quantile_edges", quantile_edges)
-            print(type(quantile_edges))
             quantile_edges = ak.to_numpy(quantile_edges)
 
             # replace -infinity from empty values with the previous bin edge
@@ -750,13 +704,6 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
             for iquant in range(1, nquants):
                 quantile_edges[..., iquant] = np.where(quantile_edges[..., iquant]==-np.inf, quantile_edges[..., iquant-1], quantile_edges[..., iquant])
 
-
-            # print("quantile_edges", quantile_edges)
-
-            print("quantile_edges.shape", quantile_edges.shape)
-
-            # helper_axes = condaxes[:iax+1] + iqaxes[:iax+1-ncond]
-
             iquantax = iax - ncond
 
             quantile_integer_axis = hist.axis.Integer(0, axis.size, underflow=False, overflow=False, name=f"{axis.name}_int")
@@ -764,13 +711,8 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
 
             helper_axes = condaxes[:iax+1] + quantile_integer_axes
 
-            # helper_hist = hist.Hist(*helper_axes, metadata={"qunatile_axis" : ax, "quantile_integer_axis" : quantile_integer_axis})
             helper_hist = hist.Hist(*helper_axes)
             helper_hist.values(flow=True)[...] = quantile_edges
-
-
-            # # helper_hist.metadata["iqaxis"] = iqaxes[iquantax]
-            # print("iqaxis", helper_hist.metadata["qaxisint"])
 
             quantile_hists.append(helper_hist)
 
@@ -778,6 +720,8 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
 
 
 def define_quantile_ints(df, cols, quantile_hists):
+    """Define transformed columns corresponding to conditional quantile bins (integers)"""
+
     ncols = len(cols)
     nquant = len(quantile_hists)
     ncond = ncols - nquant
@@ -792,22 +736,14 @@ def define_quantile_ints(df, cols, quantile_hists):
         helper_hist = narf.hist_to_pyroot_boost(quantile_hist, tensor_rank=1)
         quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
 
-        print(quanthelper)
-
         helper_cols = helper_cols_cond + [col]
-        print("helper_cols", helper_cols)
         coltypes = [df.GetColumnType(helpercol) for helpercol in helper_cols]
-        print("coltypes", coltypes)
 
         outname = f"{col}_iquant"
         df = df.Define(outname, quanthelper, helper_cols)
         helper_cols_cond.append(outname)
 
-    print(quantile_hists)
     quantile_axes = list(quantile_hists[-1].axes)
     quantile_cols = helper_cols_cond
-
-    print("quantile_axes", quantile_axes)
-
 
     return df, quantile_axes, quantile_cols

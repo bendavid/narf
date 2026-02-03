@@ -629,102 +629,15 @@ namespace narf {
       // find the quantile bin corresponding to the last argument
       auto const upper = std::upper_bound(edges.data(), edges.data()+nquants, last);
       auto const iquant = std::distance(edges.data(), upper);
-      // auto const lower = std::lower_bound(edges.data(), edges.data()+nquants, last);
-      // auto const iquant = std::distance(edges.data(), lower) - 1;
       return std::clamp<boost::histogram::axis::index_type>(iquant, 0, nquants-1);
     }
   };
 
   // CTAD doesn't work reliably from cppyy so add factory function
-  // also use std::vector as input to play nice with cppyy auto conversion from python types
-  // template <typename Storage, typename... Axes>
-  // HistHelper<Storage, Axes...> make_quantile_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h, const std::array<double, Storage::value_type::size> &quants) {
-  //   using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
-  //   return QuantileHelper(std::forward<hist_t>(h), quants);
-  // }
-
   template <typename Storage, typename... Axes>
   QuantileHelper<Storage, Axes...> make_quantile_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
     using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
     return QuantileHelper<Storage, Axes...>(std::forward<hist_t>(h));
-  }
-
-#if false
-
-  // base template
-  template <typename... Hists>
-  class MultiQuantileHelper {};
-
-  // specialization (to allow multiple parameter packs)
-  template<typename... Hists, typename StorageLast, typename... AxesLast>
-  class MultiQuantileHelper<boost::histogram::histogram<std::tuple<AxesLast...>, StorageLast>, Hists...> {
-    using scalar_t = typename StorageLast::value_type::tensor_t::Scalar;
-    using last_hist_t = boost::histogram::histogram<std::tuple<AxesLast...>, StorageLast>;
-    using index_t = boost::histogram::axis::index_type;
-    static auto constexpr nhelpers = sizeof...(Hists) + 1;
-    static auto constexpr nargs = sizeof...(AxesLast) + 1;
-    static auto constexpr nargscond = nargs - nhelpers;
-
-  public:
-    MultiQuantileHelper(Hists&&... hists, last_hist_t&& histlast) : helpers_(QuantileHelper(std::move(hists))..., QuantileHelper<StorageLast, AxesLast...>(std::move(histlast))) {}
-
-    std::array<index_t, nhelpers> operator()(const boost::histogram::axis::traits::value_type<AxesLast>&... args, const scalar_t &last) {
-      auto const argtup = std::tie(args..., last);
-      return getquants(argtup, std::array<index_t, 0>{}, std::make_index_sequence<nargscond>{}, std::make_index_sequence<0>{});
-    }
-
-  private:
-    template<std::size_t... IdxsArgsCond, std::size_t... IdxsQuants, typename Tup>
-    auto getquants(const Tup &argtup,  const std::array<index_t, sizeof...(IdxsQuants)> &quants, std::index_sequence<IdxsArgsCond...>, std::index_sequence<IdxsQuants...>) {
-      // auto constexpr nidxs = sizeof...(Idxs);
-      auto constexpr nin = sizeof...(IdxsQuants);
-      auto constexpr nout = nin + 1;
-      std::array<index_t, nout> res;
-      std::copy(quants.begin(), quants.end(), res.begin());
-      res[nin] = std::get<nin>(helpers_)(std::get<IdxsArgsCond>(argtup)..., std::get<IdxsQuants>(quants)..., std::get<nargscond + nin>(argtup));
-
-      if constexpr (nout < nhelpers) {
-        return getquants(argtup, res, std::make_index_sequence<nargscond>{}, std::make_index_sequence<nout>{});
-      }
-      else {
-        return res;
-      }
-    }
-    std::tuple<decltype(QuantileHelper(Hists()))..., QuantileHelper<StorageLast, AxesLast...>> helpers_;
-  };
-
-  template<typename... Hists, typename StorageLast, typename... AxesLast>
-  MultiQuantileHelper<boost::histogram::histogram<std::tuple<AxesLast...>, StorageLast>, Hists...> make_multi_quantile_helper(Hists&&... hists, boost::histogram::histogram<std::tuple<AxesLast...>, StorageLast> &&histlast) {
-    using last_hist_t = boost::histogram::histogram<std::tuple<AxesLast...>, StorageLast>;
-    return MultiQuantileHelper<last_hist_t, Hists...>(std::forward<Hists>(hists)..., std::forward<last_hist_t>(histlast));
-  }
-
-#endif
-
-  // CTAD doesn't work reliably from cppyy so add factory function
-  // also use std::vector as input to play nice with cppyy auto conversion from python types
-  // template <typename Storage, typename... Axes>
-  // QuantileHelper<Storage, Axes...> make_quantile_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h, const std::vector<double> &quantsv) {
-  //   using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
-  //   constexpr auto nquants = Storage::value_type::size;
-  //
-  //   std::array<double, nquants> quants;
-  //   std::copy(quantsv.begin(), quantsv.end(), quants.begin());
-  //   return QuantileHelper(std::forward<hist_t>(h), quants);
-  // }
-
-  // template class QuantileHelper<boost::histogram::storage_adaptor<vector<narf::tensor_accumulator<double,Eigen::Sizes<10> > > >, boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >>;
-
-  void testqhelper() {
-    using hist_t = boost::histogram::histogram<tuple<boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> > >,boost::histogram::storage_adaptor<vector<narf::tensor_accumulator<double,Eigen::Sizes<10> > > > >;
-
-
-    // std::array<double, 10> arr;
-    // std::vector<double> arr(10);
-    // hist_t h();
-    auto helper = make_quantile_helper(hist_t());
-
-    // auto multihelper = make_multi_quantile_helper(hist_t(), hist_t());
   }
 
 }
