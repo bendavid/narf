@@ -654,8 +654,16 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
     if ncond > 0:
         hist_cond = df.HistoBoost("hist_cond", condaxes, condcols, storage=hist.storage.Int64())
 
-    # from_rdataframe is not lazy and immediately triggers an event loop, so it has to go last
-    arr = ak.from_rdataframe(df, cols)
+    # this triggers an event loop, so it has to go last
+    # FIXME ak.from_rdataframe triggers C++ errors when proper error handling is enabled in cppyy so fallback to the manual
+    # case for now which is restricted to scalar columns
+    try:
+        arr = ak.from_rdataframe(df, cols)
+    except TypeError:
+        arrs = {col : df.Take[df.GetColumnType(col)](col) for col in cols}
+        akdict = {col : np.array(arr.GetValue(), copy=False) for col, arr in arrs.items()}
+        del arrs
+        arr = ak.Array(akdict)
 
     if ncond > 0:
         hist_cond = hist_cond.GetValue()
