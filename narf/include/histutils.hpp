@@ -594,7 +594,7 @@ namespace narf {
   public:
     HistHelper(hist_t &&resource) : resourceHist_(std::make_shared<const hist_t>(std::move(resource))) {}
 
-    double operator()(const boost::histogram::axis::traits::value_type<Axes>&... args) {
+    auto const &operator()(const boost::histogram::axis::traits::value_type<Axes>&... args) {
       return narf::get_value(*resourceHist_, args...);
     }
 
