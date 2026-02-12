@@ -741,11 +741,16 @@ def define_quantile_ints(df, cols, quantile_hists):
 
     for col, quantile_hist in zip(quantcols, quantile_hists):
 
-        helper_hist = narf.hist_to_pyroot_boost(quantile_hist, tensor_rank=1)
-        quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
+        if len(quantile_hist.axes) > 1:
+            helper_hist = narf.hist_to_pyroot_boost(quantile_hist, tensor_rank=1)
+            quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
+        else:
+            # special case for static quantiles with no conditional variables
+            vals = quantile_hist.values()
+            arr = ROOT.std.array["double", vals.size](vals)
+            quanthelper = ROOT.narf.QuantileHelperStatic[vals.size](arr)
 
         helper_cols = helper_cols_cond + [col]
-        coltypes = [df.GetColumnType(helpercol) for helpercol in helper_cols]
 
         outname = f"{col}_iquant"
         df = df.Define(outname, quanthelper, helper_cols)

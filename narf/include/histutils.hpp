@@ -640,6 +640,25 @@ namespace narf {
     return QuantileHelper<Storage, Axes...>(std::forward<hist_t>(h));
   }
 
+  // simple version for static quantiles
+  template<std::size_t N>
+  class QuantileHelperStatic {
+  public:
+    using edge_t = std::array<double, N>;
+
+    QuantileHelperStatic(const edge_t &edges) : edges_(edges) {}
+
+    boost::histogram::axis::index_type operator() (double val) {
+      // find the quantile bin corresponding to the last argument
+      auto const upper = std::upper_bound(edges_.begin(), edges_.end(), val);
+      auto const iquant = std::distance(edges_.begin(), upper);
+      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, N-1);
+    }
+
+  private:
+    const edge_t edges_;
+  };
+
 }
 
 // template <typename T, typename... Args>
