@@ -8,7 +8,7 @@ import subprocess
 import shlex
 import narf.rdfutils
 
-def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
+def build_and_run(datasets, build_function, lumi_function=None, lumi_tree = "LuminosityBlocks", event_tree = "Events", run_col = "run", lumi_col = "luminosityBlock"):
 
     # TODO make this check more robust and move it to a more appropriate place
     if hasattr(ROOT, "Eigen"):
@@ -43,7 +43,7 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
     evtcounts = []
     chains = []
     lumidfs = []
-    lumisums = {}
+    lumi_results = {}
 
     for dataset in datasets:
         print("start of loop")
@@ -71,8 +71,12 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
             print("sum")
             lumisum = lumidf.Sum("lumival")
             print("add to dict")
-            lumisums[dataset.name] = lumisum
+            lumi_results[dataset.name] = {"sum": lumisum}
 
+            if lumi_function is not None:
+                res = lumi_function(lumidf, dataset)
+                lumi_results[dataset.name]["res"] = res
+                
         print("event chain")
         chain = ROOT.TChain(event_tree)
         for fpath in dataset.filepaths:
@@ -113,8 +117,8 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
         print("end lumi loop")
     time_done_lumi = time.time()
 
-    for name, val in lumisums.items():
-        print(name, val.GetValue())
+    for name, val in lumi_results.items():
+        print(name, val["sum"].GetValue())
 
     print("begin event loop", flush = True)
     ROOT.narf.RunGraphsWithProgressBar(dfs, 1000, interval)
@@ -143,24 +147,28 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
         dsetresult["weight_sum"] = float(hweight[0].GetValue())
         dsetresult["event_count"] = float(evtcount.GetValue())
 
-        if dataset.name in lumisums:
-            hlumi = ROOT.TH1D("lumi", "lumi", 1, 0.5, 1.5)
-            lumi = lumisums[dataset.name].GetValue()
+        def make_proxy_dict(res):
+            output = {}
+
+            for r in res:
+                if isinstance(r.GetValue(), ROOT.TNamed):
+                    name = r.GetName()
+                elif hasattr(r.GetValue(), "name"):
+                    name = r.GetValue().name
+                else:
+                    name = str(uuid.uuid1())
+
+                output[name] = H5PickleProxy(r.GetValue())
+            return output
+
+        if dataset.name in lumi_results:
+            lumi_res = lumi_results[dataset.name]
+            lumi = lumi_res["sum"].GetValue()
             dsetresult["lumi"] = lumi
+            if "res" in lumi_res.keys():
+                dsetresult["lumi_outout"] = make_proxy_dict(lumi_res["res"])
 
-        output = {}
-
-        for r in res:
-            if isinstance(r.GetValue(), ROOT.TNamed):
-                name = r.GetName()
-            elif hasattr(r.GetValue(), "name"):
-                name = r.GetValue().name
-            else:
-                name = str(uuid.uuid1())
-
-            output[name] = H5PickleProxy(r.GetValue())
-
-        dsetresult["output"] = output
+        dsetresult["output"] = make_proxy_dict(res)
 
         resultdict[dataset.name] = dsetresult
 
