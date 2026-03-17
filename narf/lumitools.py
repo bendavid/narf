@@ -8,20 +8,21 @@ import narf.clingutils
 narf.clingutils.Declare('#include "lumitools.hpp"')
 
 
-def make_brilcalc_helper(filename, idx, action):
+def make_brilcalc_helper(filename, value, action):
     runs = []
     lumis = []
     vals = []
 
     with open(filename) as lumicsv:
-        reader = csv.reader(lumicsv)
+        _ = next(lumicsv) # skip first header, e.g., '#Data tag : 24v2 , Norm tag: None\n'
+        reader = csv.DictReader(lumicsv)
         for row in reader:
-            if row[0][0]=="#":
+            if row['#run:fill'][0]=="#":
                 continue
 
-            run, _ = row[0].split(":")
-            lumi, _ = row[1].split(":")
-            val = row[idx]
+            run, _ = row['#run:fill'].split(":")
+            lumi, _ = row['ls'].split(":")
+            val = row[value]
             
             run = int(run)
             lumi = int(lumi)
@@ -29,19 +30,19 @@ def make_brilcalc_helper(filename, idx, action):
             
             runs.append(run)
             lumis.append(lumi)
-            vals.append(val)            
+            vals.append(val)  
         
     brilcalc_helper = ROOT.BrilcalcHelper(runs, lumis, vals)
     return brilcalc_helper
 
 
 def make_lumihelper(filename):
-    return make_brilcalc_helper(filename, idx=6, action=float)
+    return make_brilcalc_helper(filename, value='recorded(/fb)', action=float)
 
 
 def make_timehelper(filename):
     action = lambda x: datetime.strptime(x, "%m/%d/%y %H:%M:%S").timestamp()
-    return make_brilcalc_helper(filename, idx=2, action=action)
+    return make_brilcalc_helper(filename, value='time', action=action)
 
 
 def make_jsonhelper(filename):
