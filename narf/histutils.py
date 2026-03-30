@@ -11,6 +11,7 @@ import array
 import cppyy.ll
 import narf.clingutils
 import awkward as ak
+import narf.rdfutils
 
 narf.clingutils.Declare('#include "histutils.hpp"')
 narf.clingutils.Declare('#include "FillBoostHelperAtomic.hpp"')
@@ -760,3 +761,24 @@ def define_quantile_ints(df, cols, quantile_hists):
     quantile_cols = helper_cols_cond
 
     return df, quantile_axes, quantile_cols
+
+def shifted_hist(df, name, axes, original_cols, shifted_cols, nominal_weight_col=None):
+    cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+    helper = ROOT.narf.make_hist_shift_helper(*cppaxes)
+
+    helper_cols = original_cols + shifted_cols
+    if nominal_weight_col:
+        helper_cols += [nominal_weight_col]
+
+    shifted_weight_name = f"{name}_shifted_weight"
+
+    df_tmp = narf.rdfutils.flexible_define(df, shifted_weight_name, ROOT.std.move(helper), helper_cols)
+
+    hist_cols = original_cols + [shifted_weight_name]
+
+    h = df_tmp.HistoBoost(name, axes, hist_cols)
+    return h
+
+    # return rdfutils
+
+

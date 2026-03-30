@@ -5,6 +5,7 @@
 #include "traits.hpp"
 #include "atomic_adaptor.hpp"
 #include "tensorutils.hpp"
+#include "tensorevalutils.hpp"
 #include <ROOT/RResultPtr.hxx>
 #include <ROOT/TThreadExecutor.hxx>
 #include <iostream>
@@ -658,6 +659,206 @@ namespace narf {
   private:
     const edge_t edges_;
   };
+  /// Computes the minimum-variance reweighting to approximate a shift
+  /// in the underlying variables of a multidimensional histogram.
+  ///
+  /// For each axis i, an event at position x_i in a bin of width a_i
+  /// centred at x_c_i, being shifted by Delta_i = x_i' - x_i, receives
+  /// a per-axis additive correction:
+  ///
+  ///     w_i = 12 * Delta_i / a_i^2 * (x_i - x_c_i)
+  ///
+  /// The full event weight is  1 + sum_i w_i  (first-order approximation).
+
+  template<typename... Axes>
+  class HistShiftHelper {
+  public:
+    HistShiftHelper(const Axes&... axes) : axes_(axes...) {}
+    HistShiftHelper(Axes&&... axes) : axes_(std::move(axes)...) {}
+
+    template <typename... Args>
+    auto operator()(const Args&... args) const {
+      auto const tup = std::tie(args...);
+      auto constexpr idxs = std::index_sequence_for<Axes...>{};
+      auto const nominal_args_tup = split_tuple(tup, idxs);
+      auto const shifted_args_tup = split_tuple<sizeof...(Axes)>(tup, idxs);
+
+      if constexpr (sizeof...(args) > 2*sizeof...(Axes)) {
+        // weight has been provided
+        auto const &nominal_weight = std::get<2*sizeof...(Axes) - 1>(tup);
+        return operator() (nominal_args_tup, shifted_args_tup, nominal_weight);
+      }
+      else {
+        // weight has not been provided
+        return operator() (nominal_args_tup, shifted_args_tup);
+      }
+    }
+
+    template <typename... Nominal, typename... Shifted, typename Weight=double>
+    auto operator()(const std::tuple<Nominal...> &nominal, const std::tuple<Shifted...> &shifted, const Weight &nominal_weight=1.) const {
+      return compute(nominal, shifted, nominal_weight, std::index_sequence_for<Axes...>{});
+    }
+
+
+
+  private:
+
+    template <std::size_t Offset = 0, typename Tuple, std::size_t... Is>
+    auto split_tuple(const Tuple &tup, std::index_sequence<Is...>) const {
+      return std::tie(std::get<Is+Offset>(tup)...);
+    }
+
+    /// Core computation dispatched over axis indices.
+    template <typename Nominal, typename Shifted, typename Weight, std::size_t... Is>
+    auto compute(const Nominal& orig,
+                   const Shifted& shifted,
+                   const Weight& nominal_weight,
+                   std::index_sequence<Is...>) const
+    {
+      auto w = (axis_weight<Is>(std::get<Is>(orig),
+                                std::get<Is>(shifted)) + ... + 1.);
+      return nominal_weight*w;
+    }
+
+    /// Per-axis weight correction.
+    ///
+    /// Returns 0 correction if the original value falls in an
+    /// underflow/overflow bin (no reliable bin geometry).
+    ///
+    template <std::size_t I, typename Nominal, typename Shifted>
+    auto axis_weight(const Nominal &x_orig,
+                       const Shifted &x_shifted) const
+    {
+
+      namespace traits = boost::histogram::axis::traits;
+
+      const auto& ax = std::get<I>(axes_);
+
+      // the reweighting only makes sense for an ordered axis
+      constexpr bool ordered = traits::is_ordered<std::decay_t<decltype(ax)>>();
+
+      if constexpr (ordered) {
+        auto bin_idx = traits::index(ax, x_orig);
+
+        auto const delta = x_shifted - x_orig;
+
+        // Underflow / overflow: no reliable bin geometry, return no correction.
+        if (bin_idx < 0 || bin_idx >= ax.size()) {
+            auto const res = 0.*delta;
+            return tensor_eval(res);
+        }
+
+        // Bin geometry via the axis bin view.
+        const double lo  = traits::value(ax, bin_idx);
+        const double hi  = traits::value(ax, bin_idx + 1);
+        const double a   = hi - lo;
+        const double x_c = 0.5 * (lo + hi);
+
+        // w_i = 12 * delta / a^2 * (x_orig - x_c)
+        // return 12.0 * delta * (x_orig - x_c) / (a * a);
+        auto const res = 12.0 * delta * (x_orig - x_c) / (a * a);
+        return tensor_eval(res);
+      }
+      else {
+        // weight correction is zero if values are equal, nan otherwise
+        // do this in a way which is compatible with element-wise operations in
+        // RVec, Eigen::Tensor, Eigen::Array, etc
+        auto const equal = x_shifted == x_orig;
+        auto const res = 0./equal;
+        return tensor_eval(res);
+      }
+    }
+
+    //
+
+
+    const std::tuple<Axes...> axes_;
+  };
+
+  // factory function needed because CTAD doesn't work reliably from cppyy
+  // also the trailing return type is needed because cppyy has issues with auto
+  // return types
+  template <typename... Axes>
+  HistShiftHelper<std::decay_t<Axes>...> make_hist_shift_helper(Axes&&... axes) {
+    return HistShiftHelper(std::forward<Axes>(axes)...);
+  }
+
+  // template class narf::DefineWrapper<::narf::HistShiftHelper<boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<0> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> > >,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<float>,double,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<double>>;
+
+
+  // ROOT::VecOps::RVec<double> testshift() {
+  //   boost::histogram::axis::regular a(100, 0., 1.);
+  //   // boost::histogram::axis::integer b(0, 10);
+  //   // boost::histogram::axis::category<int> b{5, 9, 4};
+  //   boost::histogram::axis::category<std::string> b{"a", "b", "c"};
+  //   // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
+  //   // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
+  //   HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
+  //   // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
+  //   ROOT::VecOps::RVec<double> shifted0 {1e-3, 0.};
+  //   // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<int> shifted1 {5, 11};
+  //   // ROOT::VecOps::RVec<int> shifted1 {9, 9};
+  //   ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
+  //   // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
+  //   // shifted0.emplace_back(1e-3);
+  //   // shifted0.emplace_back(1e-4);
+  //   // shifted1.emplace_back(1e-3);
+  //   // shifted1.emplace_back(1e-4);
+  //
+  //   // narf::DefineWrapper<decltype(helper), std::string, double, double, ROOT::VecOps::RVec<std::string>, ROOT::VecOps::RVec<double>> wrappedhelper(helper);
+  //
+  //
+  //   // 1e-4);
+  //   // return helper(0., 0., 5., 1e-3, 0.);
+  //   // return helper(0., 0., 5., shifted0, shifted1);
+  //   // return helper(0., 0, 5., shifted0, shifted1);
+  //   // return helper(0., 9, 1., shifted0, shifted1);
+  //   // return helper(0., "a", 1., shifted0, shifted1);
+  //   // return helper("a", 0., shifted1, shifted0, 1.);
+  //   return helper("a", 0., shifted1, shifted0);
+  //   // return wrappedhelper("a", 0., shifted1, shifted0, 1.);
+  //   // return helper(0., 0., 1e-3, 0.);
+  // }
+  //
+  // using test_tensor_t = Eigen::TensorFixedSize<double, Eigen::Sizes<2, 1>>;
+  //
+  //  test_tensor_t testshifteigen() {
+  //   boost::histogram::axis::regular a(100, 0., 1.);
+  //   // boost::histogram::axis::integer b(0, 10);
+  //   // boost::histogram::axis::category<int> b{5, 9, 4};
+  //   boost::histogram::axis::category<std::string> b{"a", "b", "c"};
+  //   // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
+  //   // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
+  //   HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
+  //   // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<double> shifted0 {0., 0.};
+  //   test_tensor_t shifted0;
+  //   shifted0(0, 0) = 0.;
+  //   shifted0(1, 0) = 0.;
+  //
+  //   std::string shifted1 = "a";
+  //
+  //   // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<int> shifted1 {5, 11};
+  //   // ROOT::VecOps::RVec<int> shifted1 {9, 9};
+  //   // ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
+  //   // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
+  //   // shifted0.emplace_back(1e-3);
+  //   // shifted0.emplace_back(1e-4);
+  //   // shifted1.emplace_back(1e-3);
+  //   // shifted1.emplace_back(1e-4);
+  //
+  //   // 1e-4);
+  //   // return helper(0., 0., 5., 1e-3, 0.);
+  //   // return helper(0., 0., 5., shifted0, shifted1);
+  //   // return helper(0., 0, 5., shifted0, shifted1);
+  //   // return helper(0., 9, 1., shifted0, shifted1);
+  //   // return helper(0., "a", 1., shifted0, shifted1);
+  //   // return helper("a", 0., shifted1, shifted0, 1.);
+  //   return helper("a", 0., shifted1, shifted0);
+  //   // return helper(0., 0., 1e-3, 0.);
+  // }
 
 }
 
@@ -675,3 +876,4 @@ namespace narf {
 
 
 #endif
+
