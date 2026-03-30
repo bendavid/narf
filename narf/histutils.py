@@ -767,10 +767,14 @@ def shifted_hist(df, name, axes, original_cols, shifted_cols, nominal_weight_col
     helper = ROOT.narf.make_hist_shift_helper(*cppaxes)
 
     helper_cols = original_cols + shifted_cols
+
     if nominal_weight_col:
         helper_cols += [nominal_weight_col]
 
     shifted_weight_name = f"{name}_shifted_weight"
+
+    print("helper_cols", helper_cols)
+    print("helper", helper)
 
     df_tmp = narf.rdfutils.flexible_define(df, shifted_weight_name, ROOT.std.move(helper), helper_cols)
 
