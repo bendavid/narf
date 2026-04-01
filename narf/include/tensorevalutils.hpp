@@ -202,7 +202,7 @@ using tensor_result_t =
 /// Overload 1: expression → materialise into a new concrete tensor.
 template <typename E>
     requires eigen_tensor_detail::needs_eval_v<std::remove_cvref_t<E>>
-[[nodiscard]] auto tensor_eval(E&& expr) -> tensor_result_t<E>
+[[nodiscard]] auto eval_if_tensor(E&& expr) -> tensor_result_t<E>
 {
     tensor_result_t<E> result = std::forward<E>(expr);
     return result;
@@ -211,7 +211,7 @@ template <typename E>
 /// Overload 2: already concrete / non‑Eigen → perfect‑forward.
 template <typename E>
     requires (!eigen_tensor_detail::needs_eval_v<std::remove_cvref_t<E>>)
-[[nodiscard]] constexpr decltype(auto) tensor_eval(E&& val) noexcept
+[[nodiscard]] constexpr decltype(auto) eval_if_tensor(E&& val) noexcept
 {
     return std::forward<E>(val);
 }

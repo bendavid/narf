@@ -13,6 +13,7 @@
 #include <eigen3/Eigen/Dense>
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
 #include "oneapi/tbb.h"
+#include <ranges>
 
 namespace narf {
   using namespace boost::histogram;
@@ -660,16 +661,135 @@ namespace narf {
   private:
     const edge_t edges_;
   };
+
+  template<typename T>
+  void print_type() {
+    std::cout << std::source_location::current().function_name() << std::endl;
+  }
+
+  template<typename T>
+  void print_type(const T&) {
+    print_type<T>();
+  }
+
+  template<typename... Ts>
+  auto make_zip_view(Ts&&... xs) {
+    using iterator_t = decltype(std::make_tuple(xs.begin()...));
+    using sentinel_t = decltype(std::make_tuple(xs.end()...));
+
+    // not a general iterator, but usable with iota_view together with take_while_view
+    class zip_iterator {
+    public:
+      using difference_type = std::ptrdiff_t;
+
+      zip_iterator(Ts&... us) : its_(us.begin()...), ends_(us.end()...) {}
+
+      zip_iterator& operator++() {
+        auto op = [](auto&... its){ (++its, ...); };
+        std::apply(op, its_);
+        return *this;
+      }
+
+      zip_iterator operator++(int) {
+        auto pre = *this;
+        ++*this;
+        return pre;
+      }
+
+      auto operator*() const {;
+        auto op = [](auto&... its)
+          { return std::tuple<std::ranges::range_reference_t<Ts>...>(*its...); };
+        auto res = std::apply(op, its_);
+        return res;
+      }
+
+      bool at_end() const {
+        auto op = [this]<std::size_t... Is>(std::index_sequence<Is...>) {
+          return ( (std::get<Is>(its_) == std::get<Is>(ends_)) || ...);
+        };
+        return op(std::index_sequence_for<Ts...>{});
+      }
+
+    private:
+      iterator_t its_;
+      sentinel_t ends_;
+    };
+
+    // TODO somehow allow this to inherit sized_iterator behaviour from input ranges?
+
+    auto res = std::views::iota(zip_iterator(xs...))
+                | std::views::take_while([](auto const &it) { return !it.at_end(); })
+                | std::views::transform([](auto const &it){ return *it; });
+
+    return res;
+  }
+
+  template<typename T>
+  auto make_repeat_view(const T& x) {
+    using value_type = std::decay_t<T>;
+
+    class repeat_iterator {
+    public:
+      using difference_type = std::ptrdiff_t;
+
+      repeat_iterator(const T& u) : val_(u) {}
+
+      repeat_iterator& operator++() { return *this; }
+
+      repeat_iterator operator++(int) { return *this; }
+
+      value_type operator*() const {
+        return val_;
+      }
+
+    private:
+      value_type val_;
+    };
+
+    return std::views::iota(repeat_iterator(x))
+            | std::views::transform([](auto const &it){ return *it; });
+  }
+
+  template <template <typename> class C, class T>
+  auto range_to(T &range) {
+    using value_type = std::decay_t<decltype(*range.begin())>;
+
+    C<value_type> res;
+    if constexpr (std::ranges::sized_range<T>) {
+      res.reserve(range.size());
+    }
+    int i=0;
+    for (auto const &elem : range) {
+      res.emplace_back(elem);
+    }
+
+    return res;
+  }
+
+  template<typename T>
+  static constexpr bool is_container = std::ranges::range<T> && !std::is_same_v<std::decay_t<T>, std::string> && !std::is_same_v<std::decay_t<T>, char*> && !std::is_same_v<std::decay_t<T>, const char*>;
+
+
+  template <typename T>
+  auto make_view(T&& x) {
+    if constexpr (is_container<T>) {
+      return std::views::all(std::forward<T>(x));
+    }
+    else {
+      return make_repeat_view(std::ref(x))
+              | std::views::transform([](auto const &refwrap){ return refwrap.get(); });
+    }
+  }
+
+
+
+
+
   /// Computes the minimum-variance reweighting to approximate a shift
-  /// in the underlying variables of a multidimensional histogram.
-  ///
-  /// For each axis i, an event at position x_i in a bin of width a_i
-  /// centred at x_c_i, being shifted by Delta_i = x_i' - x_i, receives
-  /// a per-axis additive correction:
-  ///
-  ///     w_i = 12 * Delta_i / a_i^2 * (x_i - x_c_i)
+  /// or smearing in the underlying variables of a multidimensional histogram.
   ///
   /// The full event weight is  1 + sum_i w_i  (first-order approximation).
+  /// summing over the contribution from each axis
 
   template<typename... Axes>
   class HistShiftHelper {
@@ -679,25 +799,29 @@ namespace narf {
 
     template <typename... Args>
     auto operator()(const Args&... args) const {
-      auto const tup = std::tie(args...);
+      auto const tup = std::forward_as_tuple(args...);
       auto constexpr idxs = std::index_sequence_for<Axes...>{};
       auto const nominal_args_tup = split_tuple(tup, idxs);
       auto const shifted_args_tup = split_tuple<sizeof...(Axes)>(tup, idxs);
+      auto const smear_shifted_args_tup = split_tuple<2*sizeof...(Axes)>(tup, idxs);
 
-      if constexpr (sizeof...(args) > 2*sizeof...(Axes)) {
+      if constexpr (sizeof...(args) > 3*sizeof...(Axes)) {
         // weight has been provided
-        auto const &nominal_weight = std::get<2*sizeof...(Axes)>(tup);
-        return operator() (nominal_args_tup, shifted_args_tup, nominal_weight);
+        auto const &nominal_weight = std::get<3*sizeof...(Axes)>(tup);
+        return operator() (nominal_args_tup, shifted_args_tup, smear_shifted_args_tup, nominal_weight);
       }
       else {
         // weight has not been provided
-        return operator() (nominal_args_tup, shifted_args_tup);
+        return operator() (nominal_args_tup, shifted_args_tup, smear_shifted_args_tup);
       }
     }
 
-    template <typename... Nominal, typename... Shifted, typename Weight=double>
-    auto operator()(const std::tuple<Nominal...> &nominal, const std::tuple<Shifted...> &shifted, const Weight &nominal_weight=1.) const {
-      return compute(nominal, shifted, nominal_weight, std::index_sequence_for<Axes...>{});
+    template <typename... Nominal, typename... Shifted, typename... ShiftedSmeared, typename Weight=double>
+    auto operator()(const std::tuple<Nominal...> &nominal,
+                    const std::tuple<Shifted...> &shifted,
+                    const std::tuple<ShiftedSmeared...> &shifted_smeared,
+                    const Weight &nominal_weight=1.) const {
+      return compute(nominal, shifted, shifted_smeared, nominal_weight, std::index_sequence_for<Axes...>{});
     }
 
 
@@ -706,105 +830,131 @@ namespace narf {
 
     template <std::size_t Offset = 0, typename Tuple, std::size_t... Is>
     auto split_tuple(const Tuple &tup, std::index_sequence<Is...>) const {
-      return std::tie(std::get<Is+Offset>(tup)...);
+      return std::forward_as_tuple(std::get<Is+Offset>(tup)...);
     }
 
     /// Core computation dispatched over axis indices.
-    template <typename Nominal, typename Shifted, typename Weight, std::size_t... Is>
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
     auto compute(const Nominal& orig,
                    const Shifted& shifted,
+                   const SmearShifted& smear_shifted,
                    const Weight& nominal_weight,
-                   std::index_sequence<Is...>) const
-    {
-      auto w = (axis_weight(std::get<Is>(orig),
-                                std::get<Is>(shifted),
-                                std::get<Is>(axes_)) + ... + 1.);
-      auto const res = nominal_weight*w;
-      return tensor_eval(res);
+                   std::index_sequence<Is...> idxs) const {
+
+      constexpr bool is_container_any = (is_container<std::tuple_element_t<Is, Nominal>> || ...);
+
+      if constexpr(is_container_any) {
+        auto make_range_of_tuples = [](auto const&...xs){ return make_zip_view(make_view(xs)...); };
+
+        auto const orig_v = std::apply(make_range_of_tuples, orig);
+        auto const shifted_v = std::apply(make_range_of_tuples, shifted);
+        auto const smear_shifted_v = std::apply(make_range_of_tuples, smear_shifted);
+
+        auto compute_elem_impl = [this, &nominal_weight, &idxs](auto &orig_elem, auto &shifted_elem, auto&smear_shifted_elem) {
+          return compute_impl(orig_elem, shifted_elem, smear_shifted_elem, nominal_weight, idxs);
+        };
+        auto compute_elem = [&compute_elem_impl](auto const &elem_tuple) { return std::apply(compute_elem_impl, elem_tuple); };
+
+        auto const res_view = make_zip_view(orig_v, shifted_v, smear_shifted_v)
+                              | std::views::transform(compute_elem);
+
+        auto const res = range_to<ROOT::VecOps::RVec>(res_view);
+        return res;
+      }
+      else {
+        return compute_impl(orig, shifted, smear_shifted, nominal_weight, idxs);
+      }
     }
 
-    template<typename T>
-    static constexpr bool is_container = std::ranges::range<T> && !std::is_same_v<std::decay_t<T>, std::string> && !std::is_same_v<std::decay_t<T>, char*>;
+    /// Core computation dispatched over axis indices.
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
+    auto compute_impl(const Nominal& orig,
+                 const Shifted& shifted,
+                 const SmearShifted& smear_shifted,
+                 const Weight& nominal_weight,
+                 std::index_sequence<Is...>) const {
+
+
+      // FIXME it would be better to just accumulate directly using e.g. a wrapper
+      // of std::pair implement the + operator for element-wise addition
+      auto const weights = std::make_tuple(axis_weight(std::get<Is>(orig),
+                                      std::get<Is>(shifted),
+                                      std::get<Is>(smear_shifted),
+                                      std::get<Is>(axes_))...);
+
+      auto const first_order = (std::get<Is>(weights).first + ...);
+      auto const second_order = (std::get<Is>(weights).second + ...);
+
+      auto const res = (first_order + second_order*second_order + 1.)*nominal_weight;
+
+      // might be an unevaluated Eigen tensor expression, so force evaluation
+      return eval_if_tensor(res);
+    }
 
     /// Per-axis weight correction.
     ///
     /// Returns 0 correction if the original value falls in an
     /// underflow/overflow bin (no reliable bin geometry).
     ///
-    template <typename Nominal, typename Shifted, typename Axis>
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Axis>
     auto axis_weight(const Nominal &x_orig,
-                     const Shifted &x_shifted,
-                     const Axis &ax) const
-    {
-
-      if constexpr(is_container<Nominal>) {
-        static_assert(is_container<Shifted>, "If the original values are provided as a range (or Container like a std::vector or RVec) then the shifted values must also be.");
-
-        using value_type = decltype(axis_weight_impl(*x_orig.begin(), *x_shifted.begin(), ax));
-        ROOT::VecOps::RVec<value_type> res;
-        // reserve capacity if and only if the size of the input is available
-        if constexpr (requires { std::size(x_orig); }) {
-          res.reserve(std::size(x_orig));
-        }
-
-        // TODO in C++23 this can be replaced with zip from the STL
-        for (auto const &[x_orig_elem, x_shifted_elem] : boost::combine(x_orig, x_shifted)) {
-          res.emplace_back(axis_weight_impl(x_orig_elem, x_shifted_elem, ax));
-        }
-        return res;
-
-
-      }
-      else {
-        return axis_weight_impl(x_orig, x_shifted, ax);
-      }
-    }
-
-    template<typename Nominal, typename Shifted, typename Axis>
-    auto axis_weight_impl(const Nominal &x_orig,
                            const Shifted &x_shifted,
+                           const SmearShifted& x_smear_shifted,
                            const Axis &ax) const {
 
       namespace traits = boost::histogram::axis::traits;
 
       // the reweighting only makes sense for an ordered axis
-      constexpr bool ordered = traits::is_ordered<std::decay_t<decltype(ax)>>();
+      constexpr bool continuous = traits::is_continuous<Axis>();
 
-      if constexpr(ordered) {
+      if constexpr(continuous) {
 
         auto const bin_idx = ax.index(x_orig);
-        auto const delta = x_shifted - x_orig;
-
-        // Underflow / overflow: no reliable bin geometry, return no correction.
-        if (bin_idx < 0 || bin_idx >= ax.size()) {
-          auto const res = 0.*delta;
-          return tensor_eval(res);
-        }
 
         // Bin geometry via the axis bin view.
-        auto const lo  = traits::value(ax, bin_idx);
-        auto const hi  = traits::value(ax, bin_idx + 1);
-        auto const a   = hi - lo;
-        auto const x_c = 0.5 * (lo + hi);
+        auto const a   = traits::width(ax, bin_idx);
+        auto const x_c = traits::value(ax, bin_idx + 0.5);
 
-        // w_i = 12 * delta / a^2 * (x_orig - x_c)
-        auto const res = -12.0 * delta * (x_orig - x_c) / (a * a);
-        return tensor_eval(res);
+        // for the general case complete weight is
+        // -12*d^T u + 144 u^T S u - 12 tr(S)
+        // with
+        // u = (x - bin_center)/width
+        // d = (shifted-orig)/width
+        // S = diag(invwidth) smearing_covariance (diag_invwidth)
+        // currently implemented for the simplified case where S = v v^T is rank 1 with
+        // v = (smear_shifted - orig)/width
+
+        // TODO to implement the more general covariance case in the future, this function
+        // will probably have to return u,d,s individually with more complicated logic
+        // in the calling layer to do the matrix multiplication
+
+        // Underflow / overflow: no reliable bin geometry, return no correction.
+        const bool flow = bin_idx < 0 || bin_idx >= ax.size();
+
+        auto const u = flow ? 0.*x_orig : (x_orig - x_c)/a;
+        auto const delta = (x_shifted - x_orig)/a;
+        auto const v = (x_smear_shifted - x_orig)/a;
+
+        auto const res_first = -12.*delta*u - 12.*v*v;
+        auto const res_second = 12.*v*u;
+
+        // might be an unevaluated Eigen tensor expression, so force evaluation
+        return std::make_pair(eval_if_tensor(res_first), eval_if_tensor(res_second));
       }
       else {
         // weight correction is zero if values are equal, nan otherwise
         // do this in a way which is compatible with element-wise operations in
         // RVec, Eigen::Tensor, Eigen::Array, etc
-        auto const equal = x_shifted == x_orig;
-        auto const res = 0./equal;
-        return tensor_eval(res);
+        auto const equal_first = x_shifted == x_orig;
+        auto const res_first = 0./equal_first;
+
+        auto const equal_second = x_smear_shifted == x_orig;
+        auto const res_second = 0./equal_second;
+
+        // might be an unevaluated Eigen tensor expression, so force evaluation
+        return std::make_pair(eval_if_tensor(res_first), eval_if_tensor(res_second));
       }
     }
-
-
-
-    //
-
 
     const std::tuple<Axes...> axes_;
   };
@@ -856,14 +1006,16 @@ namespace narf {
     // return helper(0., "a", 1., shifted0, shifted1);
     // return helper("a", 0., shifted1, shifted0, 1.);
     // return helper("a", 0., shifted1, shifted0);
-    return helper(shifted1, shifted0, shifted1, shifted0);
+    return helper(shifted1, shifted0, shifted1, shifted0, shifted1, shifted0);
+    // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
     // return wrappedhelper("a", 0., shifted1, shifted0, 1.);
     // return helper(0., 0., 1e-3, 0.);
   }
 
   using test_tensor_t = Eigen::TensorFixedSize<double, Eigen::Sizes<2, 1>>;
+  using vec_tensor_t = ROOT::VecOps::RVec<test_tensor_t>;
 
-   test_tensor_t testshifteigen() {
+   vec_tensor_t testshifteigen() {
     boost::histogram::axis::regular a(100, 0., 1.);
     // boost::histogram::axis::integer b(0, 10);
     // boost::histogram::axis::category<int> b{5, 9, 4};
@@ -874,10 +1026,17 @@ namespace narf {
     // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
     // ROOT::VecOps::RVec<double> shifted0 {0., 0.};
     test_tensor_t shifted0;
-    shifted0(0, 0) = 0.;
+    shifted0(0, 0) = 1e-3;
     shifted0(1, 0) = 0.;
 
     std::string shifted1 = "a";
+
+
+    ROOT::VecOps::RVec<std::string> vec1{"a", "a"};
+    ROOT::VecOps::RVec<double> vec0{0., 0.};
+
+    ROOT::VecOps::RVec<test_tensor_t> vecshifted0{shifted0, shifted0};
+    // ROOT::VecOps::RVec<std::string> vecshifted1{shifted1, shifted1};
 
     // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
     // ROOT::VecOps::RVec<int> shifted1 {5, 11};
@@ -896,8 +1055,34 @@ namespace narf {
     // return helper(0., 9, 1., shifted0, shifted1);
     // return helper(0., "a", 1., shifted0, shifted1);
     // return helper("a", 0., shifted1, shifted0, 1.);
-    return helper("a", 0., shifted1, shifted0);
+    // return helper("a", 0., shifted1, shifted0);
+    // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+
+
+
+
+    // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+    return helper("a", vec0, shifted1, vecshifted0, shifted1, vecshifted0);
+    // return helper(vec1, vec0, shifted1, vecshifted0, vec1, vecshifted0);
     // return helper(0., 0., 1e-3, 0.);
+  }
+
+  void testshiftrw() {
+    std::vector<int> a{0, 1, 2};
+    std::vector<int> b{3, 4, 5};
+
+    std::cout << a.front() << std::endl;
+    std::cout << b.front() << std::endl;
+
+    for (auto const &[ael, bel] : make_zip_view(a, b)) {
+      ael = 0;
+      bel = 1;
+    }
+
+    std::cout << a.front() << std::endl;
+    std::cout << b.front() << std::endl;
+
+
   }
 
 }
