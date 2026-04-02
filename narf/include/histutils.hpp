@@ -4,6 +4,7 @@
 #include <boost/histogram.hpp>
 #include <boost/range/combine.hpp>
 #include "traits.hpp"
+#include "utils.hpp"
 #include "atomic_adaptor.hpp"
 #include "tensorutils.hpp"
 #include "tensorevalutils.hpp"
@@ -662,129 +663,6 @@ namespace narf {
     const edge_t edges_;
   };
 
-  template<typename T>
-  void print_type() {
-    std::cout << std::source_location::current().function_name() << std::endl;
-  }
-
-  template<typename T>
-  void print_type(const T&) {
-    print_type<T>();
-  }
-
-  template<typename... Ts>
-  auto make_zip_view(Ts&&... xs) {
-    using iterator_t = decltype(std::make_tuple(xs.begin()...));
-    using sentinel_t = decltype(std::make_tuple(xs.end()...));
-
-    // not a general iterator, but usable with iota_view together with take_while_view
-    class zip_iterator {
-    public:
-      using difference_type = std::ptrdiff_t;
-
-      zip_iterator(Ts&... us) : its_(us.begin()...), ends_(us.end()...) {}
-
-      zip_iterator& operator++() {
-        auto op = [](auto&... its){ (++its, ...); };
-        std::apply(op, its_);
-        return *this;
-      }
-
-      zip_iterator operator++(int) {
-        auto pre = *this;
-        ++*this;
-        return pre;
-      }
-
-      auto operator*() const {;
-        auto op = [](auto&... its)
-          { return std::tuple<std::ranges::range_reference_t<Ts>...>(*its...); };
-        auto res = std::apply(op, its_);
-        return res;
-      }
-
-      bool at_end() const {
-        auto op = [this]<std::size_t... Is>(std::index_sequence<Is...>) {
-          return ( (std::get<Is>(its_) == std::get<Is>(ends_)) || ...);
-        };
-        return op(std::index_sequence_for<Ts...>{});
-      }
-
-    private:
-      iterator_t its_;
-      sentinel_t ends_;
-    };
-
-    // TODO somehow allow this to inherit sized_iterator behaviour from input ranges?
-
-    auto res = std::views::iota(zip_iterator(xs...))
-                | std::views::take_while([](auto const &it) { return !it.at_end(); })
-                | std::views::transform([](auto const &it){ return *it; });
-
-    return res;
-  }
-
-  template<typename T>
-  auto make_repeat_view(const T& x) {
-    using value_type = std::decay_t<T>;
-
-    class repeat_iterator {
-    public:
-      using difference_type = std::ptrdiff_t;
-
-      repeat_iterator(const T& u) : val_(u) {}
-
-      repeat_iterator& operator++() { return *this; }
-
-      repeat_iterator operator++(int) { return *this; }
-
-      value_type operator*() const {
-        return val_;
-      }
-
-    private:
-      value_type val_;
-    };
-
-    return std::views::iota(repeat_iterator(x))
-            | std::views::transform([](auto const &it){ return *it; });
-  }
-
-  template <template <typename> class C, class T>
-  auto range_to(T &range) {
-    using value_type = std::decay_t<decltype(*range.begin())>;
-
-    C<value_type> res;
-    if constexpr (std::ranges::sized_range<T>) {
-      res.reserve(range.size());
-    }
-    int i=0;
-    for (auto const &elem : range) {
-      res.emplace_back(elem);
-    }
-
-    return res;
-  }
-
-  template<typename T>
-  static constexpr bool is_container = std::ranges::range<T> && !std::is_same_v<std::decay_t<T>, std::string> && !std::is_same_v<std::decay_t<T>, char*> && !std::is_same_v<std::decay_t<T>, const char*>;
-
-
-  template <typename T>
-  auto make_view(T&& x) {
-    if constexpr (is_container<T>) {
-      return std::views::all(std::forward<T>(x));
-    }
-    else {
-      return make_repeat_view(std::ref(x))
-              | std::views::transform([](auto const &refwrap){ return refwrap.get(); });
-    }
-  }
-
-
-
-
-
   /// Computes the minimum-variance reweighting to approximate a shift
   /// or smearing in the underlying variables of a multidimensional histogram.
   ///
@@ -929,6 +807,7 @@ namespace narf {
         // in the calling layer to do the matrix multiplication
 
         // Underflow / overflow: no reliable bin geometry, return no correction.
+        // (note that a is infinity in this case such that delta and v are also zero)
         const bool flow = bin_idx < 0 || bin_idx >= ax.size();
 
         auto const u = flow ? 0.*x_orig : (x_orig - x_c)/a;
@@ -975,115 +854,115 @@ namespace narf {
   // template
   // Define<::narf::DefineWrapper<narf::HistShiftHelper<boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<0> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> > >,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<double>,double>>;
 
-  ROOT::VecOps::RVec<double> testshift() {
-    boost::histogram::axis::regular a(100, 0., 1.);
-    // boost::histogram::axis::integer b(0, 10);
-    // boost::histogram::axis::category<int> b{5, 9, 4};
-    boost::histogram::axis::category<std::string> b{"a", "b", "c"};
-    // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
-    // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
-    HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
-    // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
-    ROOT::VecOps::RVec<double> shifted0 {1e-3, 0.};
-    // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
-    // ROOT::VecOps::RVec<int> shifted1 {5, 11};
-    // ROOT::VecOps::RVec<int> shifted1 {9, 9};
-    ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
-    // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
-    // shifted0.emplace_back(1e-3);
-    // shifted0.emplace_back(1e-4);
-    // shifted1.emplace_back(1e-3);
-    // shifted1.emplace_back(1e-4);
-
-    // narf::DefineWrapper<decltype(helper), std::string, double, double, ROOT::VecOps::RVec<std::string>, ROOT::VecOps::RVec<double>> wrappedhelper(helper);
-
-
-    // 1e-4);
-    // return helper(0., 0., 5., 1e-3, 0.);
-    // return helper(0., 0., 5., shifted0, shifted1);
-    // return helper(0., 0, 5., shifted0, shifted1);
-    // return helper(0., 9, 1., shifted0, shifted1);
-    // return helper(0., "a", 1., shifted0, shifted1);
-    // return helper("a", 0., shifted1, shifted0, 1.);
-    // return helper("a", 0., shifted1, shifted0);
-    return helper(shifted1, shifted0, shifted1, shifted0, shifted1, shifted0);
-    // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
-    // return wrappedhelper("a", 0., shifted1, shifted0, 1.);
-    // return helper(0., 0., 1e-3, 0.);
-  }
-
-  using test_tensor_t = Eigen::TensorFixedSize<double, Eigen::Sizes<2, 1>>;
-  using vec_tensor_t = ROOT::VecOps::RVec<test_tensor_t>;
-
-   vec_tensor_t testshifteigen() {
-    boost::histogram::axis::regular a(100, 0., 1.);
-    // boost::histogram::axis::integer b(0, 10);
-    // boost::histogram::axis::category<int> b{5, 9, 4};
-    boost::histogram::axis::category<std::string> b{"a", "b", "c"};
-    // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
-    // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
-    HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
-    // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
-    // ROOT::VecOps::RVec<double> shifted0 {0., 0.};
-    test_tensor_t shifted0;
-    shifted0(0, 0) = 1e-3;
-    shifted0(1, 0) = 0.;
-
-    std::string shifted1 = "a";
-
-
-    ROOT::VecOps::RVec<std::string> vec1{"a", "a"};
-    ROOT::VecOps::RVec<double> vec0{0., 0.};
-
-    ROOT::VecOps::RVec<test_tensor_t> vecshifted0{shifted0, shifted0};
-    // ROOT::VecOps::RVec<std::string> vecshifted1{shifted1, shifted1};
-
-    // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
-    // ROOT::VecOps::RVec<int> shifted1 {5, 11};
-    // ROOT::VecOps::RVec<int> shifted1 {9, 9};
-    // ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
-    // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
-    // shifted0.emplace_back(1e-3);
-    // shifted0.emplace_back(1e-4);
-    // shifted1.emplace_back(1e-3);
-    // shifted1.emplace_back(1e-4);
-
-    // 1e-4);
-    // return helper(0., 0., 5., 1e-3, 0.);
-    // return helper(0., 0., 5., shifted0, shifted1);
-    // return helper(0., 0, 5., shifted0, shifted1);
-    // return helper(0., 9, 1., shifted0, shifted1);
-    // return helper(0., "a", 1., shifted0, shifted1);
-    // return helper("a", 0., shifted1, shifted0, 1.);
-    // return helper("a", 0., shifted1, shifted0);
-    // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
-
-
-
-
-    // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
-    return helper("a", vec0, shifted1, vecshifted0, shifted1, vecshifted0);
-    // return helper(vec1, vec0, shifted1, vecshifted0, vec1, vecshifted0);
-    // return helper(0., 0., 1e-3, 0.);
-  }
-
-  void testshiftrw() {
-    std::vector<int> a{0, 1, 2};
-    std::vector<int> b{3, 4, 5};
-
-    std::cout << a.front() << std::endl;
-    std::cout << b.front() << std::endl;
-
-    for (auto const &[ael, bel] : make_zip_view(a, b)) {
-      ael = 0;
-      bel = 1;
-    }
-
-    std::cout << a.front() << std::endl;
-    std::cout << b.front() << std::endl;
-
-
-  }
+  // ROOT::VecOps::RVec<double> testshift() {
+  //   boost::histogram::axis::regular a(100, 0., 1.);
+  //   // boost::histogram::axis::integer b(0, 10);
+  //   // boost::histogram::axis::category<int> b{5, 9, 4};
+  //   boost::histogram::axis::category<std::string> b{"a", "b", "c"};
+  //   // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
+  //   // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
+  //   HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
+  //   // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
+  //   ROOT::VecOps::RVec<double> shifted0 {1e-3, 0.};
+  //   // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<int> shifted1 {5, 11};
+  //   // ROOT::VecOps::RVec<int> shifted1 {9, 9};
+  //   ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
+  //   // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
+  //   // shifted0.emplace_back(1e-3);
+  //   // shifted0.emplace_back(1e-4);
+  //   // shifted1.emplace_back(1e-3);
+  //   // shifted1.emplace_back(1e-4);
+  //
+  //   // narf::DefineWrapper<decltype(helper), std::string, double, double, ROOT::VecOps::RVec<std::string>, ROOT::VecOps::RVec<double>> wrappedhelper(helper);
+  //
+  //
+  //   // 1e-4);
+  //   // return helper(0., 0., 5., 1e-3, 0.);
+  //   // return helper(0., 0., 5., shifted0, shifted1);
+  //   // return helper(0., 0, 5., shifted0, shifted1);
+  //   // return helper(0., 9, 1., shifted0, shifted1);
+  //   // return helper(0., "a", 1., shifted0, shifted1);
+  //   // return helper("a", 0., shifted1, shifted0, 1.);
+  //   // return helper("a", 0., shifted1, shifted0);
+  //   return helper(shifted1, shifted0, shifted1, shifted0, shifted1, shifted0);
+  //   // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+  //   // return wrappedhelper("a", 0., shifted1, shifted0, 1.);
+  //   // return helper(0., 0., 1e-3, 0.);
+  // }
+  //
+  // using test_tensor_t = Eigen::TensorFixedSize<double, Eigen::Sizes<2, 1>>;
+  // using vec_tensor_t = ROOT::VecOps::RVec<test_tensor_t>;
+  //
+  //  vec_tensor_t testshifteigen() {
+  //   boost::histogram::axis::regular a(100, 0., 1.);
+  //   // boost::histogram::axis::integer b(0, 10);
+  //   // boost::histogram::axis::category<int> b{5, 9, 4};
+  //   boost::histogram::axis::category<std::string> b{"a", "b", "c"};
+  //   // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
+  //   // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
+  //   HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
+  //   // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<double> shifted0 {0., 0.};
+  //   test_tensor_t shifted0;
+  //   shifted0(0, 0) = 1e-3;
+  //   shifted0(1, 0) = 0.;
+  //
+  //   std::string shifted1 = "a";
+  //
+  //
+  //   ROOT::VecOps::RVec<std::string> vec1{"a", "a"};
+  //   ROOT::VecOps::RVec<double> vec0{0., 0.};
+  //
+  //   ROOT::VecOps::RVec<test_tensor_t> vecshifted0{shifted0, shifted0};
+  //   // ROOT::VecOps::RVec<std::string> vecshifted1{shifted1, shifted1};
+  //
+  //   // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<int> shifted1 {5, 11};
+  //   // ROOT::VecOps::RVec<int> shifted1 {9, 9};
+  //   // ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
+  //   // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
+  //   // shifted0.emplace_back(1e-3);
+  //   // shifted0.emplace_back(1e-4);
+  //   // shifted1.emplace_back(1e-3);
+  //   // shifted1.emplace_back(1e-4);
+  //
+  //   // 1e-4);
+  //   // return helper(0., 0., 5., 1e-3, 0.);
+  //   // return helper(0., 0., 5., shifted0, shifted1);
+  //   // return helper(0., 0, 5., shifted0, shifted1);
+  //   // return helper(0., 9, 1., shifted0, shifted1);
+  //   // return helper(0., "a", 1., shifted0, shifted1);
+  //   // return helper("a", 0., shifted1, shifted0, 1.);
+  //   // return helper("a", 0., shifted1, shifted0);
+  //   // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+  //
+  //
+  //
+  //
+  //   // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+  //   return helper("a", vec0, shifted1, vecshifted0, shifted1, vecshifted0);
+  //   // return helper(vec1, vec0, shifted1, vecshifted0, vec1, vecshifted0);
+  //   // return helper(0., 0., 1e-3, 0.);
+  // }
+  //
+  // void testshiftrw() {
+  //   std::vector<int> a{0, 1, 2};
+  //   std::vector<int> b{3, 4, 5};
+  //
+  //   std::cout << a.front() << std::endl;
+  //   std::cout << b.front() << std::endl;
+  //
+  //   for (auto const &[ael, bel] : make_zip_view(a, b)) {
+  //     ael = 0;
+  //     bel = 1;
+  //   }
+  //
+  //   std::cout << a.front() << std::endl;
+  //   std::cout << b.front() << std::endl;
+  //
+  //
+  // }
 
 }
 
