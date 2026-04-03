@@ -41,27 +41,7 @@ namespace narf {
       return default_range_adapter<std::decay_t<T>>(std::forward<T>(range));
     }
   }
-
-  void testadapt() {
-    auto x = std::views::iota(0);
-
-    // double &&y = 5.;
-
-    auto y = make_range_with_default(x);
-    print_type_of(y);
-    print_type_of(make_range_with_default(x));
-    print_type_of(make_range_with_default(std::move(x)));
-
-    print_type_of(make_range_with_default(std::vector<double>()));
-
-    // print_type_of(5.);
-    // print_type_of<decltype(y)>();
-    // print_type_of<decltype(std::forward<y)>();
-    // print_type_of<double&&>();
-
-  }
-
-
+  
   // TODO this can eventually be replaced with zip_view in C++23
 
   template<typename... Ranges>
