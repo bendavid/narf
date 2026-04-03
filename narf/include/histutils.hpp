@@ -2,15 +2,19 @@
 #define NARF_HISTUTILS_H
 
 #include <boost/histogram.hpp>
+#include <boost/range/combine.hpp>
 #include "traits.hpp"
+#include "utils.hpp"
 #include "atomic_adaptor.hpp"
 #include "tensorutils.hpp"
+#include "tensorevalutils.hpp"
 #include <ROOT/RResultPtr.hxx>
 #include <ROOT/TThreadExecutor.hxx>
 #include <iostream>
 #include <eigen3/Eigen/Dense>
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
 #include "oneapi/tbb.h"
+#include <ranges>
 
 namespace narf {
   using namespace boost::histogram;
@@ -659,6 +663,307 @@ namespace narf {
     const edge_t edges_;
   };
 
+  /// Computes the minimum-variance reweighting to approximate a shift
+  /// or smearing in the underlying variables of a multidimensional histogram.
+  ///
+  /// The full event weight is  1 + sum_i w_i  (first-order approximation).
+  /// summing over the contribution from each axis
+
+  template<typename... Axes>
+  class HistShiftHelper {
+  public:
+    HistShiftHelper(const Axes&... axes) : axes_(axes...) {}
+    HistShiftHelper(Axes&&... axes) : axes_(std::move(axes)...) {}
+
+    template <typename... Args>
+    auto operator()(const Args&... args) const {
+      auto const tup = std::forward_as_tuple(args...);
+      auto constexpr idxs = std::index_sequence_for<Axes...>{};
+      auto const nominal_args_tup = split_tuple(tup, idxs);
+      auto const shifted_args_tup = split_tuple<sizeof...(Axes)>(tup, idxs);
+      auto const smear_shifted_args_tup = split_tuple<2*sizeof...(Axes)>(tup, idxs);
+
+      if constexpr (sizeof...(args) > 3*sizeof...(Axes)) {
+        // weight has been provided
+        auto const &nominal_weight = std::get<3*sizeof...(Axes)>(tup);
+        return operator() (nominal_args_tup, shifted_args_tup, smear_shifted_args_tup, nominal_weight);
+      }
+      else {
+        // weight has not been provided
+        return operator() (nominal_args_tup, shifted_args_tup, smear_shifted_args_tup);
+      }
+    }
+
+    template <typename... Nominal, typename... Shifted, typename... ShiftedSmeared, typename Weight=double>
+    auto operator()(const std::tuple<Nominal...> &nominal,
+                    const std::tuple<Shifted...> &shifted,
+                    const std::tuple<ShiftedSmeared...> &shifted_smeared,
+                    const Weight &nominal_weight=1.) const {
+      return compute(nominal, shifted, shifted_smeared, nominal_weight, std::index_sequence_for<Axes...>{});
+    }
+
+
+
+  private:
+
+    template <std::size_t Offset = 0, typename Tuple, std::size_t... Is>
+    auto split_tuple(const Tuple &tup, std::index_sequence<Is...>) const {
+      return std::forward_as_tuple(std::get<Is+Offset>(tup)...);
+    }
+
+    /// Core computation dispatched over axis indices.
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
+    auto compute(const Nominal& orig,
+                   const Shifted& shifted,
+                   const SmearShifted& smear_shifted,
+                   const Weight& nominal_weight,
+                   std::index_sequence<Is...> idxs) const {
+
+      constexpr bool is_container_any = (is_container<std::tuple_element_t<Is, Nominal>> || ...);
+
+      if constexpr(is_container_any) {
+        auto make_range_of_tuples = [](auto const&...xs){ return make_zip_view(make_view(xs)...); };
+
+        auto const orig_v = std::apply(make_range_of_tuples, orig);
+        auto const shifted_v = std::apply(make_range_of_tuples, shifted);
+        auto const smear_shifted_v = std::apply(make_range_of_tuples, smear_shifted);
+
+        auto compute_elem_impl = [this, &nominal_weight, &idxs](auto &orig_elem, auto &shifted_elem, auto&smear_shifted_elem) {
+          return compute_impl(orig_elem, shifted_elem, smear_shifted_elem, nominal_weight, idxs);
+        };
+        auto compute_elem = [&compute_elem_impl](auto const &elem_tuple) { return std::apply(compute_elem_impl, elem_tuple); };
+
+        auto const res_view = make_zip_view(orig_v, shifted_v, smear_shifted_v)
+                              | std::views::transform(compute_elem);
+
+        auto const res = range_to<ROOT::VecOps::RVec>(res_view);
+        return res;
+      }
+      else {
+        return compute_impl(orig, shifted, smear_shifted, nominal_weight, idxs);
+      }
+    }
+
+    /// Core computation dispatched over axis indices.
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
+    auto compute_impl(const Nominal& orig,
+                 const Shifted& shifted,
+                 const SmearShifted& smear_shifted,
+                 const Weight& nominal_weight,
+                 std::index_sequence<Is...>) const {
+
+
+      // FIXME it would be better to just accumulate directly using e.g. a wrapper
+      // of std::pair implement the + operator for element-wise addition
+      auto const weights = std::make_tuple(axis_weight(std::get<Is>(orig),
+                                      std::get<Is>(shifted),
+                                      std::get<Is>(smear_shifted),
+                                      std::get<Is>(axes_))...);
+
+      auto const first_order = (std::get<Is>(weights).first + ...);
+      auto const second_order = (std::get<Is>(weights).second + ...);
+
+      auto const res = (first_order + second_order*second_order + 1.)*nominal_weight;
+
+      // might be an unevaluated Eigen tensor expression, so force evaluation
+      return eval_if_tensor(res);
+    }
+
+    /// Per-axis weight correction.
+    ///
+    /// Returns 0 correction if the original value falls in an
+    /// underflow/overflow bin (no reliable bin geometry).
+    ///
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Axis>
+    auto axis_weight(const Nominal &x_orig,
+                           const Shifted &x_shifted,
+                           const SmearShifted& x_smear_shifted,
+                           const Axis &ax) const {
+
+      namespace traits = boost::histogram::axis::traits;
+
+      // the reweighting only makes sense for an ordered axis
+      constexpr bool continuous = traits::is_continuous<Axis>();
+
+      if constexpr(continuous) {
+
+        auto const bin_idx = ax.index(x_orig);
+
+        // Bin geometry via the axis bin view.
+        auto const a   = traits::width(ax, bin_idx);
+        auto const x_c = traits::value(ax, bin_idx + 0.5);
+
+        // for the general case complete weight is
+        // -12*d^T u + 144 u^T S u - 12 tr(S)
+        // with
+        // u = (x - bin_center)/width
+        // d = (shifted-orig)/width
+        // S = diag(invwidth) smearing_covariance (diag_invwidth)
+        // currently implemented for the simplified case where S = v v^T is rank 1 with
+        // v = (smear_shifted - orig)/width
+
+        // TODO to implement the more general covariance case in the future, this function
+        // will probably have to return u,d,s individually with more complicated logic
+        // in the calling layer to do the matrix multiplication
+
+        // Underflow / overflow: no reliable bin geometry, return no correction.
+        // (note that a is infinity in this case such that delta and v are also zero)
+        const bool flow = bin_idx < 0 || bin_idx >= ax.size();
+
+        auto const u = flow ? 0.*x_orig : (x_orig - x_c)/a;
+        auto const delta = (x_shifted - x_orig)/a;
+        auto const v = (x_smear_shifted - x_orig)/a;
+
+        auto const res_first = -12.*delta*u - 12.*v*v;
+        auto const res_second = 12.*v*u;
+
+        // might be an unevaluated Eigen tensor expression, so force evaluation
+        return std::make_pair(eval_if_tensor(res_first), eval_if_tensor(res_second));
+      }
+      else {
+        // weight correction is zero if values are equal, nan otherwise
+        // do this in a way which is compatible with element-wise operations in
+        // RVec, Eigen::Tensor, Eigen::Array, etc
+        auto const equal_first = x_shifted == x_orig;
+        auto const res_first = 0./equal_first;
+
+        auto const equal_second = x_smear_shifted == x_orig;
+        auto const res_second = 0./equal_second;
+
+        // might be an unevaluated Eigen tensor expression, so force evaluation
+        return std::make_pair(eval_if_tensor(res_first), eval_if_tensor(res_second));
+      }
+    }
+
+    const std::tuple<Axes...> axes_;
+  };
+
+  // factory function needed because CTAD doesn't work reliably from cppyy
+  // also the trailing return type is needed because cppyy has issues with auto
+  // return types
+  template <typename... Axes>
+  HistShiftHelper<std::decay_t<Axes>...> make_hist_shift_helper(Axes&&... axes) {
+    return HistShiftHelper(std::forward<Axes>(axes)...);
+  }
+
+  // template class narf::DefineWrapper<::narf::HistShiftHelper<boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<0> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> > >,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<float>,double,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<double>>;
+
+  // template class
+  // HistShiftHelper<boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<0> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> > >;
+
+  // template
+  // Define<::narf::DefineWrapper<narf::HistShiftHelper<boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<0> >,boost::histogram::axis::regular<double,boost::use_default,boost::use_default,boost::histogram::axis::option::bitset<3> > >,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<float>,ROOT::VecOps::RVec<int>,ROOT::VecOps::RVec<double>,double>>;
+
+  // ROOT::VecOps::RVec<double> testshift() {
+  //   boost::histogram::axis::regular a(100, 0., 1.);
+  //   // boost::histogram::axis::integer b(0, 10);
+  //   // boost::histogram::axis::category<int> b{5, 9, 4};
+  //   boost::histogram::axis::category<std::string> b{"a", "b", "c"};
+  //   // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
+  //   // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
+  //   HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
+  //   // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
+  //   ROOT::VecOps::RVec<double> shifted0 {1e-3, 0.};
+  //   // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<int> shifted1 {5, 11};
+  //   // ROOT::VecOps::RVec<int> shifted1 {9, 9};
+  //   ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
+  //   // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
+  //   // shifted0.emplace_back(1e-3);
+  //   // shifted0.emplace_back(1e-4);
+  //   // shifted1.emplace_back(1e-3);
+  //   // shifted1.emplace_back(1e-4);
+  //
+  //   // narf::DefineWrapper<decltype(helper), std::string, double, double, ROOT::VecOps::RVec<std::string>, ROOT::VecOps::RVec<double>> wrappedhelper(helper);
+  //
+  //
+  //   // 1e-4);
+  //   // return helper(0., 0., 5., 1e-3, 0.);
+  //   // return helper(0., 0., 5., shifted0, shifted1);
+  //   // return helper(0., 0, 5., shifted0, shifted1);
+  //   // return helper(0., 9, 1., shifted0, shifted1);
+  //   // return helper(0., "a", 1., shifted0, shifted1);
+  //   // return helper("a", 0., shifted1, shifted0, 1.);
+  //   // return helper("a", 0., shifted1, shifted0);
+  //   return helper(shifted1, shifted0, shifted1, shifted0, shifted1, shifted0);
+  //   // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+  //   // return wrappedhelper("a", 0., shifted1, shifted0, 1.);
+  //   // return helper(0., 0., 1e-3, 0.);
+  // }
+  //
+  // using test_tensor_t = Eigen::TensorFixedSize<double, Eigen::Sizes<2, 1>>;
+  // using vec_tensor_t = ROOT::VecOps::RVec<test_tensor_t>;
+  //
+  //  vec_tensor_t testshifteigen() {
+  //   boost::histogram::axis::regular a(100, 0., 1.);
+  //   // boost::histogram::axis::integer b(0, 10);
+  //   // boost::histogram::axis::category<int> b{5, 9, 4};
+  //   boost::histogram::axis::category<std::string> b{"a", "b", "c"};
+  //   // HistShiftHelper<decltype(a), decltype(a)> helper(a, a);
+  //   // HistShiftHelper<decltype(a), decltype(b)> helper(a, b);
+  //   HistShiftHelper<decltype(b), decltype(a)> helper(b, a);
+  //   // ROOT::VecOps::RVec<double> shifted0 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<double> shifted0 {0., 0.};
+  //   test_tensor_t shifted0;
+  //   shifted0(0, 0) = 1e-3;
+  //   shifted0(1, 0) = 0.;
+  //
+  //   std::string shifted1 = "a";
+  //
+  //
+  //   ROOT::VecOps::RVec<std::string> vec1{"a", "a"};
+  //   ROOT::VecOps::RVec<double> vec0{0., 0.};
+  //
+  //   ROOT::VecOps::RVec<test_tensor_t> vecshifted0{shifted0, shifted0};
+  //   // ROOT::VecOps::RVec<std::string> vecshifted1{shifted1, shifted1};
+  //
+  //   // ROOT::VecOps::RVec<double> shifted1 {1e-3, 1e-4};
+  //   // ROOT::VecOps::RVec<int> shifted1 {5, 11};
+  //   // ROOT::VecOps::RVec<int> shifted1 {9, 9};
+  //   // ROOT::VecOps::RVec<std::string> shifted1 {"a", "b"};
+  //   // ROOT::VecOps::RVec<double> shifted1 {0., 0.};
+  //   // shifted0.emplace_back(1e-3);
+  //   // shifted0.emplace_back(1e-4);
+  //   // shifted1.emplace_back(1e-3);
+  //   // shifted1.emplace_back(1e-4);
+  //
+  //   // 1e-4);
+  //   // return helper(0., 0., 5., 1e-3, 0.);
+  //   // return helper(0., 0., 5., shifted0, shifted1);
+  //   // return helper(0., 0, 5., shifted0, shifted1);
+  //   // return helper(0., 9, 1., shifted0, shifted1);
+  //   // return helper(0., "a", 1., shifted0, shifted1);
+  //   // return helper("a", 0., shifted1, shifted0, 1.);
+  //   // return helper("a", 0., shifted1, shifted0);
+  //   // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+  //
+  //
+  //
+  //
+  //   // return helper("a", 0., shifted1, shifted0, shifted1, shifted0);
+  //   return helper("a", vec0, shifted1, vecshifted0, shifted1, vecshifted0);
+  //   // return helper(vec1, vec0, shifted1, vecshifted0, vec1, vecshifted0);
+  //   // return helper(0., 0., 1e-3, 0.);
+  // }
+  //
+  // void testshiftrw() {
+  //   std::vector<int> a{0, 1, 2};
+  //   std::vector<int> b{3, 4, 5};
+  //
+  //   std::cout << a.front() << std::endl;
+  //   std::cout << b.front() << std::endl;
+  //
+  //   for (auto const &[ael, bel] : make_zip_view(a, b)) {
+  //     ael = 0;
+  //     bel = 1;
+  //   }
+  //
+  //   std::cout << a.front() << std::endl;
+  //   std::cout << b.front() << std::endl;
+  //
+  //
+  // }
+
 }
 
 // template <typename T, typename... Args>
@@ -675,3 +980,4 @@ namespace narf {
 
 
 #endif
+
