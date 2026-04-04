@@ -1,5 +1,7 @@
 #pragma once
 
+#include "histutils.hpp"
+
 namespace narf {
   ROOT::VecOps::RVec<double> testshift() {
     boost::histogram::axis::regular a(100, 0., 1.);
