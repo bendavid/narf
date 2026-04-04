@@ -1,6 +1,7 @@
 #pragma once
 
 #include "histutils.hpp"
+#include "matrix_utils.hpp"
 
 namespace narf {
   ROOT::VecOps::RVec<double> testshift() {
@@ -37,18 +38,53 @@ namespace narf {
   void testshiftrw() {
     std::vector<int> a{0, 1, 2};
     std::vector<int> b{3, 4, 5};
-  
+
     std::cout << a.front() << std::endl;
     std::cout << b.front() << std::endl;
-  
+
     for (auto const &[ael, bel] : make_zip_view(a, b)) {
       ael = 0;
       bel = 1;
     }
-  
+
     std::cout << a.front() << std::endl;
     std::cout << b.front() << std::endl;
-  
-  
+
+
+  }
+
+  // Test SymMatrixAtomic: construction, fetch_add, fill_row, and index symmetry.
+  // Returns true if all checks pass.
+  bool testSymMatrixAtomic() {
+    const std::size_t n = 4;
+    SymMatrixAtomic mat(n);
+
+    // Fill upper triangle: mat[i][j] = (i+1)*(j+1) for i <= j
+    for (std::size_t i = 0; i < n; ++i) {
+      for (std::size_t j = i; j < n; ++j) {
+        mat.fetch_add(i, j, double((i + 1) * (j + 1)));
+      }
+    }
+
+    // Verify via fill_row: rowData[j] == (i+1)*(j+1) for j >= i, else 0
+    std::vector<double> rowData(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      mat.fill_row(i, rowData.data());
+      for (std::size_t j = 0; j < i; ++j) {
+        if (rowData[j] != 0.0) return false;
+      }
+      for (std::size_t j = i; j < n; ++j) {
+        if (rowData[j] != double((i + 1) * (j + 1))) return false;
+      }
+    }
+
+    // Verify symmetry: fetch_add(i,j) and fetch_add(j,i) address the same element
+    SymMatrixAtomic mat2(n);
+    mat2.fetch_add(1, 3, 5.0);  // upper triangle (1,3)
+    mat2.fetch_add(3, 1, 3.0);  // lower triangle: should map to same element
+    mat2.fill_row(1, rowData.data());
+    if (rowData[3] != 8.0) return false;
+
+    return true;
   }
 }
