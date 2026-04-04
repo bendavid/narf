@@ -1,6 +1,10 @@
+#pragma once
+
 #include <atomic>
 #include <eigen3/Eigen/Dense>
 #include <algorithm>
+#include "oneapi/tbb.h"
+
 
 class SymMatrixAtomic {
 public:
@@ -47,7 +51,98 @@ private:
         return row * n_ - row * (row - 1) / 2 + (col - row);
     }
 
-  std::size_t n_;
+  std::size_t n_{};
   std::vector<std::atomic<double> > data_;
+
+};
+
+class SparseMatrixIndexValues {
+public:
+  const std::vector<std::size_t> &idxs0() const { return idxs0_; }
+  const std::vector<std::size_t> &idxs1() const { return idxs1_; }
+  const std::vector<double> &vals() const { return vals_; }
+
+  void emplace_back(std::size_t idx0, std::size_t idx1, double val) {
+    idxs0_.emplace_back(idx0);
+    idxs1_.emplace_back(idx1);
+    vals_.emplace_back(val);
+  }
+
+  void reserve(std::size_t i) {
+    idxs0_.reserve(i);
+    idxs1_.reserve(i);
+    vals_.reserve(i);
+  }
+
+  std::size_t size() const { return vals_.size(); }
+
+private:
+  std::vector<std::size_t> idxs0_;
+  std::vector<std::size_t> idxs1_;
+  std::vector<double> vals_;
+};
+
+class SparseMatrixAtomic {
+public:
+  // *FIXME* this can lock on inserts and generally has poor performance for our workloads
+  // replace with some (custom) alternative
+  using map_type = tbb::concurrent_unordered_map<std::size_t, std::atomic<double>>;
+
+  SparseMatrixAtomic(std::size_t size0, std::size_t size1) : size0_(size0), size1_(size1), data_(size0*size1/40) {}
+
+  std::atomic<double> &operator() (std::size_t idx0, std::size_t idx1) {
+    const std::size_t i = globalidx(idx0, idx1);
+    auto res = data_.emplace(i, 0.);
+    auto &it = res.first;
+    return it->second;
+  }
+
+  const std::atomic<double> &operator() (std::size_t idx0, std::size_t idx1) const {
+    const std::size_t i = globalidx(idx0, idx1);
+    return data_.at(i);
+  }
+
+  void fetch_add(std::size_t idx0, std::size_t idx1, double val) {
+    if (val != 0.) {
+      auto &elemval = operator()(idx0, idx1);
+      elemval.fetch_add(val);
+    }
+  }
+
+  SparseMatrixIndexValues index_values() const {
+    SparseMatrixIndexValues res;
+    res.reserve(data_.size());
+
+    for (auto &elem : data_) {
+      auto is = idxs(elem.first);
+      res.emplace_back(is[0], is[1], elem.second);
+    }
+
+    return res;
+  }
+
+  void clear() { data_.clear(); }
+
+  void reserve(std::size_t i) { data_.reserve(i); }
+
+  std::size_t dense_size() const { return size0_*size1_; }
+
+  map_type &data() { return data_; }
+
+private:
+  std::size_t globalidx(std::size_t idx0, std::size_t idx1) const {
+    return idx0*size0_ + idx1;
+  }
+
+  std::array<std::size_t, 2> idxs(std::size_t globalidx) const {
+    const std::size_t idx0 = globalidx/size0_;
+    const std::size_t idx1 = globalidx % size0_;
+
+    return std::array<std::size_t, 2>{idx0, idx1};
+  }
+
+  const std::size_t size0_;
+  const std::size_t size1_;
+  map_type data_;
 
 };
