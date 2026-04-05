@@ -114,7 +114,7 @@ def make_array_interface_view(boost_hist):
         
     underflow = [axis.traits.underflow for axis in boost_hist.axes]
 
-    acc_type = convert_storage_type(boost_hist._storage_type)
+    acc_type = convert_storage_type(boost_hist.storage_type)
     arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides, underflow)
 
     return arrview
@@ -132,9 +132,9 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
         scalar_type = ROOT.double
         dimensions = ROOT.Eigen.Sizes[tuple(tensor_sizes)]
 
-        if issubclass(hist_hist._storage_type, bh.storage.Double):
+        if issubclass(hist_hist.storage_type, bh.storage.Double):
             cppstoragetype = ROOT.narf.tensor_accumulator[scalar_type, dimensions]
-        elif issubclass(hist_hist._storage_type, bh.storage.Weight):
+        elif issubclass(hist_hist.storage_type, bh.storage.Weight):
             cppstoragetype = ROOT.narf.tensor_accumulator[ROOT.boost.histogram.accumulators.weighted_sum[scalar_type], dimensions]
         else:
             raise TypeError("Requested storage type is not supported with tensor weights currently")
@@ -143,7 +143,7 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
             cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
     else:
         python_axes = hist_hist.axes
-        cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
+        cppstoragetype = convert_storage_type(hist_hist.storage_type, force_atomic = force_atomic)
 
     cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
 
