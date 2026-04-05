@@ -626,7 +626,7 @@ namespace narf {
   public:
     QuantileHelper(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
 
-    boost::histogram::axis::index_type operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) {
+    boost::histogram::axis::index_type operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) const {
       auto const &hist = *base_t::resourceHist_;
       auto const &edges = narf::get_value(hist, args...).data();
 
@@ -652,7 +652,7 @@ namespace narf {
 
     QuantileHelperStatic(const edge_t &edges) : edges_(edges) {}
 
-    boost::histogram::axis::index_type operator() (double val) {
+    boost::histogram::axis::index_type operator() (double val) const {
       // find the quantile bin corresponding to the last argument
       auto const upper = std::upper_bound(edges_.begin(), edges_.end(), val);
       auto const iquant = std::distance(edges_.begin(), upper);
