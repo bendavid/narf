@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ranges>
+		
 namespace narf {
 
   template<typename T>
