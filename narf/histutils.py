@@ -754,7 +754,7 @@ def define_quantile_ints(df, cols, quantile_hists):
         helper_cols = helper_cols_cond + [col]
 
         outname = f"{col}_iquant"
-        df = df.Define(outname, quanthelper, helper_cols)
+        df = narf.rdfutils.flexible_define(df, outname, quanthelper, helper_cols)
         helper_cols_cond.append(outname)
 
     quantile_axes = list(quantile_hists[-1].axes)
