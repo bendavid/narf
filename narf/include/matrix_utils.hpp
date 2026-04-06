@@ -3,7 +3,7 @@
 #include <atomic>
 #include <eigen3/Eigen/Dense>
 #include <algorithm>
-#include "oneapi/tbb.h"
+#include "concurrent_flat_map.hpp"
 
 
 class SymMatrixAtomic {
@@ -84,22 +84,22 @@ private:
 
 class SparseMatrixAtomic {
 public:
-  // *FIXME* this can lock on inserts and generally has poor performance for our workloads
-  // replace with some (custom) alternative
-  using map_type = tbb::concurrent_unordered_map<std::size_t, std::atomic<double>>;
+  using map_type = narf::concurrent_flat_map<std::size_t, std::atomic<double>>;
 
-  SparseMatrixAtomic(std::size_t size0, std::size_t size1) : size0_(size0), size1_(size1), data_(size0*size1/40) {}
+  SparseMatrixAtomic(std::size_t size0, std::size_t size1)
+    : size0_(size0), size1_(size1),
+      data_(std::max<std::size_t>(size0 * size1 / 40, 16)) {}
 
   std::atomic<double> &operator() (std::size_t idx0, std::size_t idx1) {
     const std::size_t i = globalidx(idx0, idx1);
-    auto res = data_.emplace(i, 0.);
-    auto &it = res.first;
-    return it->second;
+    auto res = data_.emplace(i);
+    return *res.first;
   }
 
   const std::atomic<double> &operator() (std::size_t idx0, std::size_t idx1) const {
     const std::size_t i = globalidx(idx0, idx1);
-    return data_.at(i);
+    auto* p = data_.find(i);
+    return *p;
   }
 
   void fetch_add(std::size_t idx0, std::size_t idx1, double val) {
@@ -113,17 +113,17 @@ public:
     SparseMatrixIndexValues res;
     res.reserve(data_.size());
 
-    for (auto &elem : data_) {
-      auto is = idxs(elem.first);
-      res.emplace_back(is[0], is[1], elem.second);
-    }
+    data_.for_each([&](std::size_t key, const std::atomic<double>& val) {
+      auto is = idxs(key);
+      res.emplace_back(is[0], is[1], val.load());
+    });
 
     return res;
   }
 
   void clear() { data_.clear(); }
 
-  void reserve(std::size_t i) { data_.reserve(i); }
+  void reserve(std::size_t /*i*/) { /* no-op: map grows on demand */ }
 
   std::size_t dense_size() const { return size0_*size1_; }
 
