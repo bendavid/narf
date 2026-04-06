@@ -1,7 +1,14 @@
 #pragma once
 
+#include "concurrent_flat_map.hpp"
 #include "histutils.hpp"
 #include "matrix_utils.hpp"
+
+#include <atomic>
+#include <cmath>
+#include <thread>
+#include <unordered_set>
+#include <vector>
 
 namespace narf {
   ROOT::VecOps::RVec<double> testshift() {
@@ -84,6 +91,161 @@ namespace narf {
     mat2.fetch_add(3, 1, 3.0);  // lower triangle: should map to same element
     mat2.fill_row(1, rowData.data());
     if (rowData[3] != 8.0) return false;
+
+    return true;
+  }
+
+  // Test SparseMatrixAtomic: single-threaded fetch_add, index_values round-trip,
+  // clear, and multi-threaded concurrent fetch_add. Returns true on success.
+  bool testSparseMatrixAtomic() {
+    // ---- single-threaded ----
+    {
+      SparseMatrixAtomic mat(20, 20);
+      mat.fetch_add(1, 2, 3.0);
+      mat.fetch_add(1, 2, 4.0);
+      mat.fetch_add(5, 7, 1.5);
+      mat.fetch_add(0, 0, 2.0);
+      mat.fetch_add(0, 0, 0.0); // no-op
+      if (mat(1, 2).load() != 7.0) return false;
+      if (mat(5, 7).load() != 1.5) return false;
+      if (mat(0, 0).load() != 2.0) return false;
+
+      auto iv = mat.index_values();
+      if (iv.size() != 3) return false;
+      double sum = 0.0;
+      for (std::size_t k = 0; k < iv.size(); ++k) sum += iv.vals()[k];
+      if (sum != 10.5) return false;
+
+      mat.clear();
+      if (mat.index_values().size() != 0) return false;
+      // reuse after clear
+      mat.fetch_add(3, 4, 9.0);
+      if (mat(3, 4).load() != 9.0) return false;
+      if (mat.index_values().size() != 1) return false;
+    }
+
+    // ---- multi-threaded fetch_add: each (i,j) cell receives a known total ----
+    {
+      const std::size_t N = 32;
+      SparseMatrixAtomic mat(N, N);
+      const unsigned T = 8;
+      const unsigned reps = 500;
+      std::vector<std::thread> threads;
+      threads.reserve(T);
+      for (unsigned t = 0; t < T; ++t) {
+        threads.emplace_back([&, t] {
+          for (unsigned r = 0; r < reps; ++r) {
+            for (std::size_t i = 0; i < N; ++i) {
+              // Use a sparse pattern: only ~half the columns
+              std::size_t j = (i * 3 + 1) % N;
+              mat.fetch_add(i, j, 1.0 + 0.01 * t);
+            }
+          }
+        });
+      }
+      for (auto& th : threads) th.join();
+
+      double per_cell_expected = 0.0;
+      for (unsigned t = 0; t < T; ++t) per_cell_expected += reps * (1.0 + 0.01 * t);
+
+      auto iv = mat.index_values();
+      if (iv.size() != N) return false;
+      for (std::size_t k = 0; k < iv.size(); ++k) {
+        std::size_t i = iv.idxs0()[k];
+        std::size_t j = iv.idxs1()[k];
+        if (j != (i * 3 + 1) % N) return false;
+        if (std::abs(iv.vals()[k] - per_cell_expected) > 1e-9) return false;
+      }
+    }
+
+    return true;
+  }
+
+  // Test concurrent_flat_map: single-threaded correctness, expansion, and
+  // multi-threaded concurrent insert / find. Returns true on success.
+  bool testConcurrentFlatMap() {
+    // ---- single-threaded correctness, force several expansions ----
+    {
+      concurrent_flat_map<std::uint64_t, std::uint64_t> map(8);
+      const std::uint64_t N = 5000;
+      for (std::uint64_t i = 1; i <= N; ++i) {
+        auto [p, inserted] = map.emplace(i, i * 7u + 3u);
+        if (!inserted || !p || *p != i * 7u + 3u) return false;
+      }
+      // re-insert: must report not-inserted but return existing value
+      for (std::uint64_t i = 1; i <= N; ++i) {
+        auto [p, inserted] = map.emplace(i, std::uint64_t(0));
+        if (inserted || !p || *p != i * 7u + 3u) return false;
+      }
+      // find every key
+      for (std::uint64_t i = 1; i <= N; ++i) {
+        auto* p = map.find(i);
+        if (!p || *p != i * 7u + 3u) return false;
+      }
+      // missing keys
+      if (map.find(0) != nullptr) return false;
+      if (map.find(N + 1) != nullptr) return false;
+    }
+
+    // ---- pointer stability across expansion ----
+    {
+      concurrent_flat_map<std::uint64_t, std::uint64_t> map(4);
+      std::vector<std::uint64_t*> ptrs;
+      const std::uint64_t N = 1000;
+      ptrs.reserve(N);
+      for (std::uint64_t i = 1; i <= N; ++i) {
+        ptrs.push_back(map.emplace(i, i).first);
+      }
+      for (std::uint64_t i = 1; i <= N; ++i) {
+        if (ptrs[i - 1] != map.find(i)) return false;
+        if (*ptrs[i - 1] != i) return false;
+      }
+    }
+
+    // ---- multi-threaded insert / find ----
+    {
+      concurrent_flat_map<std::uint64_t, std::uint64_t> map(16);
+      const unsigned T = 8;
+      const std::uint64_t per = 4000;
+      std::atomic<std::uint64_t> dup_inserts{0};
+      std::atomic<std::uint64_t> bad{0};
+      std::vector<std::thread> threads;
+      threads.reserve(T);
+      for (unsigned t = 0; t < T; ++t) {
+        threads.emplace_back([&, t] {
+          for (std::uint64_t i = 0; i < per; ++i) {
+            // Overlapping key ranges across threads exercise contention.
+            std::uint64_t key = (i % (per / 2)) + 1 + (t % 2) * (per / 2);
+            std::uint64_t val = key * 1315423911u;
+            auto [p, ins] = map.emplace(key, val);
+            if (!p || *p != val) bad.fetch_add(1);
+            (void)ins;
+            auto* f = map.find(key);
+            if (!f || *f != val) bad.fetch_add(1);
+          }
+          // Each thread also inserts a unique key block.
+          for (std::uint64_t i = 0; i < per; ++i) {
+            std::uint64_t key = 1000000ull + t * per + i;
+            auto [p, ins] = map.emplace(key, key ^ 0xdeadbeefu);
+            if (!ins || !p || *p != (key ^ 0xdeadbeefu)) {
+              dup_inserts.fetch_add(1);
+            }
+          }
+        });
+      }
+      for (auto& th : threads) th.join();
+      if (bad.load() != 0) return false;
+      if (dup_inserts.load() != 0) return false;
+
+      // Verify all unique-block keys present and correct.
+      for (unsigned t = 0; t < T; ++t) {
+        for (std::uint64_t i = 0; i < per; ++i) {
+          std::uint64_t key = 1000000ull + t * per + i;
+          auto* p = map.find(key);
+          if (!p || *p != (key ^ 0xdeadbeefu)) return false;
+        }
+      }
+    }
 
     return true;
   }
