@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <new>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -95,6 +96,19 @@ private:
     return c;
   }
 
+  // Sentinel published in `Segment::next` while a thread is allocating the
+  // successor segment. Distinct from both nullptr and any valid pointer.
+  static Segment* growing_sentinel() noexcept {
+    return reinterpret_cast<Segment*>(static_cast<std::uintptr_t>(1));
+  }
+
+  // Returns the published successor of `s`, or nullptr if there isn't one
+  // yet (or if a growth is in progress and not yet visible to readers).
+  static Segment* observed_next(const Segment* s) noexcept {
+    Segment* n = s->next.load(std::memory_order_acquire);
+    return (n == growing_sentinel()) ? nullptr : n;
+  }
+
   // Spin until the slot's busy bit clears, then return the stable key.
   static UKey wait_not_busy(Slot& slot) noexcept {
     UKey k = slot.key.load(std::memory_order_acquire);
@@ -104,22 +118,34 @@ private:
     return k;
   }
 
-  // Allocate (or observe) the segment that follows `current`. Multiple threads
-  // racing here will agree on a single winning segment; losers free their
-  // speculative allocation.
+  // Allocate (or observe) the segment that follows `current`. Only the thread
+  // that wins the right to grow performs the allocation; other threads spin
+  // briefly on a sentinel until the new segment is published. This avoids the
+  // thundering-herd of speculative allocations that doubling-segment growth
+  // would otherwise produce under high thread contention.
   Segment* ensure_next(Segment* current) {
     Segment* next = current->next.load(std::memory_order_acquire);
-    if (next) return next;
-    auto* fresh = new Segment(current->capacity * 2);
+    if (next && next != growing_sentinel()) return next;
+
     Segment* expected = nullptr;
     if (current->next.compare_exchange_strong(
-            expected, fresh,
+            expected, growing_sentinel(),
             std::memory_order_acq_rel, std::memory_order_acquire)) {
+      // Won the race: this thread is the sole allocator.
+      Segment* fresh = nullptr;
+      try {
+        fresh = new Segment(current->capacity * 2);
+      } catch (...) {
+        current->next.store(nullptr, std::memory_order_release);
+        throw;
+      }
+      current->next.store(fresh, std::memory_order_release);
+
       // Best-effort tail advance so future inserters skip filled segments.
       Segment* t = tail_.load(std::memory_order_acquire);
       while (true) {
         Segment* tn = t->next.load(std::memory_order_acquire);
-        if (!tn) break;
+        if (!tn || tn == growing_sentinel()) break;
         if (tail_.compare_exchange_weak(t, tn,
                                         std::memory_order_acq_rel,
                                         std::memory_order_acquire)) {
@@ -128,8 +154,14 @@ private:
       }
       return fresh;
     }
-    delete fresh;
-    return expected;
+
+    // Lost the race. Either another thread is mid-allocation (sentinel
+    // observed) or the new segment is already published.
+    while (true) {
+      Segment* obs = current->next.load(std::memory_order_acquire);
+      if (obs && obs != growing_sentinel()) return obs;
+      std::this_thread::yield();
+    }
   }
 
   // Search a single segment for `target`. Returns pointer to value or nullptr.
@@ -231,7 +263,7 @@ public:
     const UKey target  = encode(key);
     const std::size_t h = hash_(key);
     for (Segment* seg = head_; seg;
-         seg = seg->next.load(std::memory_order_acquire)) {
+         seg = observed_next(seg)) {
       if (Value* v = find_in(seg, h, target)) return v;
     }
     return nullptr;
@@ -252,7 +284,7 @@ public:
 
     // Look in every existing segment first to honour insert-once semantics.
     for (Segment* seg = head_; seg;
-         seg = seg->next.load(std::memory_order_acquire)) {
+         seg = observed_next(seg)) {
       if (Value* v = find_in(seg, h, target)) return {v, false};
     }
 
@@ -266,9 +298,9 @@ public:
       // This probe sequence is saturated in `seg`; another thread may have
       // already inserted the same key into a later segment, so re-check
       // everything past `seg` before allocating.
-      Segment* next = seg->next.load(std::memory_order_acquire);
+      Segment* next = observed_next(seg);
       if (!next) next = ensure_next(seg);
-      for (Segment* s = next; s; s = s->next.load(std::memory_order_acquire)) {
+      for (Segment* s = next; s; s = observed_next(s)) {
         if (Value* v = find_in(s, h, target)) return {v, false};
       }
       seg = next;
@@ -288,7 +320,7 @@ public:
   std::size_t size() const noexcept {
     std::size_t total = 0;
     for (Segment* seg = head_; seg;
-         seg = seg->next.load(std::memory_order_acquire)) {
+         seg = observed_next(seg)) {
       total += seg->size.load(std::memory_order_acquire);
     }
     return total;
@@ -301,7 +333,7 @@ public:
   template <typename F>
   void for_each(F&& f) {
     for (Segment* seg = head_; seg;
-         seg = seg->next.load(std::memory_order_acquire)) {
+         seg = observed_next(seg)) {
       for (std::size_t i = 0; i < seg->capacity; ++i) {
         Slot& slot = seg->slots[i];
         UKey k = slot.key.load(std::memory_order_acquire);
