@@ -212,14 +212,21 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
             cpp_hist = res._GetPtr()
             snapshot = ROOT.narf.sparse_histogram_snapshot(cpp_hist)
             n = len(snapshot)
-            flat = np.empty(n, dtype=np.int64)
+            boost_flat = np.empty(n, dtype=np.int64)
             vals = np.empty(n, dtype=np.float64)
             for i, kv in enumerate(snapshot):
-                flat[i] = int(kv.first)
+                boost_flat[i] = int(kv.first)
                 vals[i] = float(kv.second)
-            size = 1
-            for ax in python_axes_sparse:
-                size *= int(ax.extent)
+            extents = tuple(int(ax.extent) for ax in python_axes_sparse)
+            size = int(np.prod(extents)) if extents else 1
+            # boost::histogram linearizes column-major (leftmost axis = stride 1),
+            # but wums.SparseHist expects numpy row-major (C order). Remap by
+            # un-raveling under F order and re-raveling under C order.
+            if n and len(extents) > 1:
+                multi = np.unravel_index(boost_flat, extents, order="F")
+                flat = np.ravel_multi_index(multi, extents, order="C").astype(np.int64)
+            else:
+                flat = boost_flat
             res._sparse_hist = SparseHist._from_flat(flat, vals, python_axes_sparse, size)
             return res._sparse_hist
 
