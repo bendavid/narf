@@ -197,6 +197,34 @@ public:
   concurrent_flat_map(const concurrent_flat_map&)            = delete;
   concurrent_flat_map& operator=(const concurrent_flat_map&) = delete;
 
+  // Move constructor: transfers ownership. The moved-from object is left in
+  // a destroy-only state; calling any other method on it is undefined.
+  concurrent_flat_map(concurrent_flat_map&& other) noexcept
+    : head_(other.head_),
+      tail_(other.tail_.load(std::memory_order_relaxed)),
+      hash_(std::move(other.hash_)) {
+    other.head_ = nullptr;
+    other.tail_.store(nullptr, std::memory_order_relaxed);
+  }
+
+  concurrent_flat_map& operator=(concurrent_flat_map&& other) noexcept {
+    if (this != &other) {
+      Segment* s = head_;
+      while (s) {
+        Segment* n = s->next.load(std::memory_order_relaxed);
+        delete s;
+        s = n;
+      }
+      head_ = other.head_;
+      tail_.store(other.tail_.load(std::memory_order_relaxed),
+                  std::memory_order_relaxed);
+      hash_ = std::move(other.hash_);
+      other.head_ = nullptr;
+      other.tail_.store(nullptr, std::memory_order_relaxed);
+    }
+    return *this;
+  }
+
   // Returns a pointer to the value associated with `key`, or nullptr.
   // The returned pointer remains valid for the lifetime of the map.
   Value* find(Key key) noexcept {
