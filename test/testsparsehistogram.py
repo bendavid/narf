@@ -1,7 +1,9 @@
 import ROOT
+import numpy as np
 import boost_histogram as bh
 import narf
 import narf.histutils
+from wums.sparse_hist import SparseHist
 
 ROOT.ROOT.EnableImplicitMT(4)
 
@@ -12,20 +14,14 @@ df = df.Define("w", "1.0")
 
 ax = bh.axis.Regular(20, 0.0, 20.0)
 res = df.HistoBoost("hsparse", [ax], ["x", "w"], storage=narf.histutils.SparseStorage(fill_fraction=1.0))
-hfill = res.GetValue()
+sh = res.GetValue()
 
-expected_per_bin = N // 20
+assert isinstance(sh, SparseHist), f"expected SparseHist, got {type(sh).__name__}"
+assert sh.nnz == 20, f"expected 20 populated bins, got {sh.nnz}"
 
-# Snapshot populated bins (linearized index, value).
-got = {int(k): float(v) for k, v in ROOT.narf.sparse_histogram_snapshot(hfill)}
-
-print(f"populated bins: {len(got)}")
-assert len(got) == 20, f"expected 20 populated bins, got {len(got)}"
-
-# boost::histogram linearized layout for a single regular axis with under/overflow:
-#   linearized = boost_index + 1, real bins occupy keys 1..20.
-for b in range(1, 21):
-    assert b in got, f"missing bin {b}"
-    assert abs(got[b] - expected_per_bin) < 1e-9, f"bin {b}: {got[b]} != {expected_per_bin}"
+# Dense round-trip with flow gives a (22,) array; with flow=False a (20,) array.
+dense_noflow = sh.toarray(flow=False)
+expected = np.full(20, N // 20, dtype=np.float64)
+assert np.allclose(dense_noflow, expected), f"mismatch: {dense_noflow} vs {expected}"
 
 print("testSparseHistogram OK")

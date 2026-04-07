@@ -179,8 +179,8 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
     if force_atomic is None:
         force_atomic = ROOT.ROOT.IsImplicitMTEnabled()
 
-    # Sparse storage path: build a narf::sparse_histogram and skip the python
-    # hist.Hist conversion entirely.
+    # Sparse storage path: build a narf::sparse_histogram backed by a
+    # concurrent_flat_map. The result is exposed as a wums.SparseHist.
     if isinstance(storage, SparseStorage):
         if tensor_axes is not None:
             raise NotImplementedError("Tensor weights are not supported with SparseStorage")
@@ -194,6 +194,42 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
         helper = ROOT.narf.FillBoostHelperAtomic[type(hfill)](ROOT.std.move(hfill))
         targs = tuple([type(df), type(helper)] + coltypes)
         res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
+
+        if not convert_to_hist:
+            return res
+
+        # Lazily convert the underlying C++ sparse histogram to a wums.SparseHist
+        # the first time the result is dereferenced.
+        from wums.sparse_hist import SparseHist
+
+        res._GetPtr = res.GetPtr
+        res._sparse_hist = None
+        python_axes_sparse = list(axes)
+
+        def _build_sparse():
+            if res._sparse_hist is not None:
+                return res._sparse_hist
+            cpp_hist = res._GetPtr()
+            snapshot = ROOT.narf.sparse_histogram_snapshot(cpp_hist)
+            n = len(snapshot)
+            flat = np.empty(n, dtype=np.int64)
+            vals = np.empty(n, dtype=np.float64)
+            for i, kv in enumerate(snapshot):
+                flat[i] = int(kv.first)
+                vals[i] = float(kv.second)
+            size = 1
+            for ax in python_axes_sparse:
+                size *= int(ax.extent)
+            res._sparse_hist = SparseHist._from_flat(flat, vals, python_axes_sparse, size)
+            return res._sparse_hist
+
+        ret_null = lambda: None
+        res.__deref__ = _build_sparse
+        res.__follow__ = _build_sparse
+        res.begin = ret_null
+        res.end = ret_null
+        res.GetPtr = _build_sparse
+        res.GetValue = _build_sparse
         return res
 
     #TODO some of this code can be shared with root histogram version
