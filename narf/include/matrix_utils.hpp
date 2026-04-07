@@ -86,9 +86,12 @@ class SparseMatrixAtomic {
 public:
   using map_type = narf::concurrent_flat_map<std::size_t, std::atomic<double>>;
 
-  SparseMatrixAtomic(std::size_t size0, std::size_t size1)
+  SparseMatrixAtomic(std::size_t size0, std::size_t size1,
+                     double fill_fraction = 0.025)
     : size0_(size0), size1_(size1),
-      data_(std::max<std::size_t>(size0 * size1 / 40, 16)) {}
+      data_(std::max<std::size_t>(
+          static_cast<std::size_t>(fill_fraction * static_cast<double>(size0 * size1)),
+          16)) {}
 
   std::atomic<double> &operator() (std::size_t idx0, std::size_t idx1) {
     const std::size_t i = globalidx(idx0, idx1);
