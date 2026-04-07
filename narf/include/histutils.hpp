@@ -807,9 +807,11 @@ namespace narf {
         // will probably have to return u,d,s individually with more complicated logic
         // in the calling layer to do the matrix multiplication
 
-        // Underflow / overflow: no reliable bin geometry, return no correction.
+        // Underflow / overflow or degenerate bin geometry (e.g. infinite bin
+        // edge): no reliable bin geometry, return no correction.
         // (note that a is infinity in this case such that delta and v are also zero)
-        const bool flow = bin_idx < 0 || bin_idx >= ax.size();
+        const bool degenerate = !std::isfinite(a) || !std::isfinite(x_c);
+        const bool flow = bin_idx < 0 || bin_idx >= ax.size() || degenerate;
 
         auto const u = flow ? 0.*x_orig : (x_orig - x_c)/a;
         auto const delta = (x_shifted - x_orig)/a;
