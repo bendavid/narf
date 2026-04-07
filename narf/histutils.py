@@ -19,6 +19,24 @@ narf.clingutils.Declare('#include "FillBoostHelperAtomic.hpp"')
 narf.clingutils.Declare('#include <eigen3/Eigen/Dense>')
 narf.clingutils.Declare('#include <eigen3/unsupported/Eigen/CXX11/Tensor>')
 
+class SparseStorage:
+    """Storage option for HistoBoost selecting a narf::concurrent_sparse_storage
+    backed by a narf::concurrent_flat_map. Conversion to a python hist.Hist
+    object is not supported in this mode.
+
+    Parameters
+    ----------
+    fill_fraction : float
+        Estimated fraction of bins (including under/overflow) that will be
+        populated. Used to size the underlying concurrent_flat_map so that
+        most fills hit the initial allocation rather than triggering
+        on-the-fly expansion. Values outside (0, 1] are accepted; pass a
+        small number for very sparse fills.
+    """
+    def __init__(self, fill_fraction=0.1):
+        self.fill_fraction = float(fill_fraction)
+
+
 def bool_to_string(b):
     if b:
         return "true"
@@ -160,6 +178,23 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
     if force_atomic is None:
         force_atomic = ROOT.ROOT.IsImplicitMTEnabled()
+
+    # Sparse storage path: build a narf::sparse_histogram and skip the python
+    # hist.Hist conversion entirely.
+    if isinstance(storage, SparseStorage):
+        if tensor_axes is not None:
+            raise NotImplementedError("Tensor weights are not supported with SparseStorage")
+        coltypes = [df.GetColumnType(col) for col in cols]
+        for coltype in coltypes[len(axes):]:
+            traits = ROOT.narf.tensor_traits[coltype]
+            if traits.is_tensor:
+                raise NotImplementedError("Tensor weights are not supported with SparseStorage")
+        cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+        hfill = ROOT.narf.make_histogram_sparse[ROOT.narf.atomic_adaptor[ROOT.double]](storage.fill_fraction, *cppaxes)
+        helper = ROOT.narf.FillBoostHelperAtomic[type(hfill)](ROOT.std.move(hfill))
+        targs = tuple([type(df), type(helper)] + coltypes)
+        res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
+        return res
 
     #TODO some of this code can be shared with root histogram version
 

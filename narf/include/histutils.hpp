@@ -6,6 +6,7 @@
 #include "traits.hpp"
 #include "utils.hpp"
 #include "atomic_adaptor.hpp"
+#include "sparse_histogram.hpp"
 #include "tensorutils.hpp"
 #include "tensorevalutils.hpp"
 #include <ROOT/RResultPtr.hxx>
