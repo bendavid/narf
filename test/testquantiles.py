@@ -59,7 +59,9 @@ condaxes = axes[:ncond]
 quantaxes = [hist.axis.Regular(nbins, 0., 1., name=f"quantile_{i}", underflow=False, overflow=False) for i in range(nquant)]
 
 # build quantile hists (triggers an event loop)
-quantile_hists = narf.histutils.build_quantile_hists(df, cols, condaxes, quantaxes)
+quantile_hists, centers_hist, volume_hist = narf.histutils.build_quantile_hists(df, cols, condaxes, quantaxes)
+print("centers:", centers_hist)
+print("volumes:", volume_hist)
 
 # define transformed variables with quantile bin indexes
 df, quantile_axes, quantile_cols = narf.histutils.define_quantile_ints(df, cols=condcols+quantcols, quantile_hists=quantile_hists)

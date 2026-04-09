@@ -727,6 +727,14 @@ def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
     ``define_quantile_ints`` detects this from the axis type and uses the
     continuous quantile helpers, which return CDF-style values in ``[0, 1]``
     obtained by linearly interpolating between the stored quantile edges.
+
+    Returns a tuple ``(quantile_hists, centers_hist, volume_hist)`` where
+    ``centers_hist`` gives the multidimensional center (one component per
+    quantile variable, along an extra ``coord`` ``StrCategory`` axis labelled
+    with the input quantile axis names when available) of each final
+    transformed quantile bin, and ``volume_hist`` gives the product of the
+    per-dimension widths of the same bin, both indexed by the full set of
+    conditional and (integer or original) quantile axes.
     """
 
     arraxes = condaxes + quantaxes
@@ -763,6 +771,8 @@ def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
 
     quantile_integer_axes = []
     quantile_hists = []
+    quantile_mins_list = []
+    quantile_maxs_list = []
 
 
     for iax, (col, axis) in enumerate(zip(cols, arraxes)):
@@ -792,11 +802,26 @@ def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
             quantile_edges = np.reshape(quantile_edges, shape_final[:iax+1])
             quantile_edges = ak.to_numpy(quantile_edges)
 
+            quantile_mins = ak.min(arr[..., col], axis=-1, mask_identity=False)
+            quantile_mins = np.reshape(quantile_mins, shape_final[:iax+1])
+            quantile_mins = ak.to_numpy(quantile_mins)
+
             # replace -infinity from empty values with the previous bin edge
             # so that the quantile edges are at least still monotonic
             nquants = quantile_edges.shape[-1]
             for iquant in range(1, nquants):
                 quantile_edges[..., iquant] = np.where(quantile_edges[..., iquant]==-np.inf, quantile_edges[..., iquant-1], quantile_edges[..., iquant])
+
+            # replace +infinity from empty values with the next bin's min,
+            # keeping mins monotonic and avoiding negative bin widths; any
+            # remaining +infinities (trailing empty bins) fall back to the
+            # corresponding max so the bin collapses to zero width.
+            for iquant in range(nquants - 2, -1, -1):
+                quantile_mins[..., iquant] = np.where(quantile_mins[..., iquant]==np.inf, quantile_mins[..., iquant+1], quantile_mins[..., iquant])
+            quantile_mins = np.where(quantile_mins==np.inf, quantile_edges, quantile_mins)
+
+            quantile_mins_list.append(quantile_mins)
+            quantile_maxs_list.append(quantile_edges)
 
             iquantax = iax - ncond
 
@@ -816,7 +841,46 @@ def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
 
             quantile_hists.append(helper_hist)
 
-    return quantile_hists
+    # Compute multidim centers and volumes for the final transformed bins.
+    # Each per-axis widths/centers array has shape covering only the
+    # conditional dims plus the quantile dims up to that axis; broadcast to
+    # the full (cond + all quant) shape and combine.
+    full_shape = tuple(shape_final)
+    per_dim_widths = []
+    per_dim_centers = []
+    for i in range(nquant):
+        mins_i = quantile_mins_list[i]
+        maxs_i = quantile_maxs_list[i]
+        widths_i = maxs_i - mins_i
+        centers_i = 0.5 * (maxs_i + mins_i)
+        ndim_extra = nquant - i - 1
+        new_shape = widths_i.shape + (1,) * ndim_extra
+        per_dim_widths.append(np.broadcast_to(widths_i.reshape(new_shape), full_shape))
+        per_dim_centers.append(np.broadcast_to(centers_i.reshape(new_shape), full_shape))
+
+    final_axes = condaxes + quantile_integer_axes
+    volume_hist = hist.Hist(*final_axes)
+    if nquant > 0:
+        volume = per_dim_widths[0].copy()
+        for w in per_dim_widths[1:]:
+            volume = volume * w
+        volume_hist.values(flow=True)[...] = volume
+
+        # Use the input quantile axis names as labels on the coord axis, with
+        # a unique placeholder for any unnamed axis.
+        coord_names = []
+        for i, ax in enumerate(quantaxes):
+            name = getattr(ax, "name", "") or ""
+            if not name or name in coord_names:
+                name = f"quant_{i}"
+            coord_names.append(name)
+        coord_axis = hist.axis.StrCategory(coord_names, name="coord", overflow=False)
+        centers_hist = hist.Hist(*final_axes, coord_axis)
+        centers_hist.values(flow=True)[...] = np.stack(per_dim_centers, axis=-1)
+    else:
+        centers_hist = hist.Hist(*final_axes)
+
+    return quantile_hists, centers_hist, volume_hist
 
 
 def define_quantile_ints(df, cols, quantile_hists):
