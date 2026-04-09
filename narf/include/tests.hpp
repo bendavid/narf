@@ -267,6 +267,27 @@ namespace narf {
     if (res.size() != 4) return false;
     if (res[0] != 0 || res[1] != 1 || res[2] != 2 || res[3] != 3) return false;
 
+    // Continuous mode: CDF in [0, 1], edges[i] -> i/(N-1).
+    QuantileHelperStaticContinuous<4> helper_c(std::array<double, 4>{0.25, 0.5, 0.75, 1.0});
+    auto const eps = 1e-9;
+    if (std::abs(helper_c(0.25) - 0.0) > eps) return false;
+    if (std::abs(helper_c(0.5) - 1.0/3.0) > eps) return false;
+    if (std::abs(helper_c(1.0) - 1.0) > eps) return false;
+    // val below first edge clamps to 0
+    if (std::abs(helper_c(0.0) - 0.0) > eps) return false;
+    // val above last edge clamps to 1
+    if (std::abs(helper_c(2.0) - 1.0) > eps) return false;
+    // midpoint of first interval
+    if (std::abs(helper_c(0.375) - (1.0/6.0)) > eps) return false;
+
+    // Container path through MapWrapper
+    auto res_c = helper_c(ROOT::VecOps::RVec<double>{0.25, 0.5, 0.75, 1.0});
+    if (res_c.size() != 4) return false;
+    if (std::abs(res_c[0] - 0.0) > eps) return false;
+    if (std::abs(res_c[1] - 1.0/3.0) > eps) return false;
+    if (std::abs(res_c[2] - 2.0/3.0) > eps) return false;
+    if (std::abs(res_c[3] - 1.0) > eps) return false;
+
     return true;
   }
 

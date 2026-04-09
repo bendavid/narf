@@ -618,7 +618,30 @@ namespace narf {
   // Helper which facilitates conversion from value to quantile for a single variable
   // The underlying histogram holds a tensor with the bin edges for the quantiles in the last variable,
   // conditional on all the previous variables
-  template <typename Storage, typename... Axes>
+  /// Look up the quantile bin for `val` in the sorted edge array [begin, end).
+  /// When Continuous is false, return the clamped integer bin index (matching
+  /// the previous behavior). When Continuous is true, return a CDF-style
+  /// double in [0, 1] obtained by linearly interpolating between adjacent
+  /// edges, with edges[i] mapping to i/(N-1) and values outside
+  /// [edges[0], edges[N-1]] clamped to 0 / 1 respectively.
+  template <bool Continuous, typename It, typename T>
+  auto quantile_lookup(It begin, It end, const T &val) {
+    const auto n = std::distance(begin, end);
+    auto const upper = std::upper_bound(begin, end, val);
+    auto const iquant = std::distance(begin, upper);
+    if constexpr (Continuous) {
+      auto const i = std::clamp<std::ptrdiff_t>(iquant - 1, 0, n - 2);
+      auto const lo = *(begin + i);
+      auto const hi = *(begin + i + 1);
+      double const frac = double(val - lo) / double(hi - lo);
+      double const res = (double(i) + frac) / double(n - 1);
+      return std::clamp(res, 0.0, 1.0);
+    } else {
+      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, n - 1);
+    }
+  }
+
+  template <typename Storage, bool Continuous, typename... Axes>
   class QuantileHelperImpl : public HistHelper<Storage, Axes...> {
     using base_t = HistHelper<Storage, Axes...>;
     using hist_t = typename base_t::hist_t;
@@ -628,21 +651,20 @@ namespace narf {
   public:
     QuantileHelperImpl(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
 
-    boost::histogram::axis::index_type operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) const {
+    auto operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) const {
       auto const &hist = *base_t::resourceHist_;
       auto const &edges = narf::get_value(hist, args...).data();
-
-      // find the quantile bin corresponding to the last argument
-      auto const upper = std::upper_bound(edges.data(), edges.data()+nquants, last);
-      auto const iquant = std::distance(edges.data(), upper);
-      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, nquants-1);
+      return quantile_lookup<Continuous>(edges.data(), edges.data() + nquants, last);
     }
   };
 
   // MapWrapper alias so container arguments are automatically broadcast /
   // zipped element-wise, while scalar arguments call through directly.
   template <typename Storage, typename... Axes>
-  using QuantileHelper = MapWrapper<QuantileHelperImpl<Storage, Axes...>>;
+  using QuantileHelper = MapWrapper<QuantileHelperImpl<Storage, false, Axes...>>;
+
+  template <typename Storage, typename... Axes>
+  using QuantileHelperContinuous = MapWrapper<QuantileHelperImpl<Storage, true, Axes...>>;
 
   // CTAD doesn't work reliably from cppyy so add factory function
   template <typename Storage, typename... Axes>
@@ -651,19 +673,22 @@ namespace narf {
     return QuantileHelper<Storage, Axes...>(std::forward<hist_t>(h));
   }
 
+  template <typename Storage, typename... Axes>
+  QuantileHelperContinuous<Storage, Axes...> make_quantile_helper_continuous(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+    return QuantileHelperContinuous<Storage, Axes...>(std::forward<hist_t>(h));
+  }
+
   // simple version for static quantiles
-  template<std::size_t N>
+  template<std::size_t N, bool Continuous = false>
   class QuantileHelperStaticImpl {
   public:
     using edge_t = std::array<double, N>;
 
     QuantileHelperStaticImpl(const edge_t &edges) : edges_(edges) {}
 
-    boost::histogram::axis::index_type operator() (double val) const {
-      // find the quantile bin corresponding to the last argument
-      auto const upper = std::upper_bound(edges_.begin(), edges_.end(), val);
-      auto const iquant = std::distance(edges_.begin(), upper);
-      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, N-1);
+    auto operator() (double val) const {
+      return quantile_lookup<Continuous>(edges_.begin(), edges_.end(), val);
     }
 
   private:
@@ -671,7 +696,10 @@ namespace narf {
   };
 
   template<std::size_t N>
-  using QuantileHelperStatic = MapWrapper<QuantileHelperStaticImpl<N>>;
+  using QuantileHelperStatic = MapWrapper<QuantileHelperStaticImpl<N, false>>;
+
+  template<std::size_t N>
+  using QuantileHelperStaticContinuous = MapWrapper<QuantileHelperStaticImpl<N, true>>;
 
   /// Computes the minimum-variance reweighting to approximate a shift
   /// or smearing in the underlying variables of a multidimensional histogram.
