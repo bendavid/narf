@@ -9,6 +9,7 @@
 #include "sparse_histogram.hpp"
 #include "tensorutils.hpp"
 #include "tensorevalutils.hpp"
+#include "rdfutils.hpp"
 #include <ROOT/RResultPtr.hxx>
 #include <ROOT/TThreadExecutor.hxx>
 #include <iostream>
@@ -671,10 +672,10 @@ namespace narf {
   /// summing over the contribution from each axis
 
   template<typename... Axes>
-  class HistShiftHelper {
+  class HistShiftHelperImpl {
   public:
-    HistShiftHelper(const Axes&... axes) : axes_(axes...) {}
-    HistShiftHelper(Axes&&... axes) : axes_(std::move(axes)...) {}
+    HistShiftHelperImpl(const Axes&... axes) : axes_(axes...) {}
+    HistShiftHelperImpl(Axes&&... axes) : axes_(std::move(axes)...) {}
 
     template <typename... Args>
     auto operator()(const Args&... args) const {
@@ -715,39 +716,6 @@ namespace narf {
     /// Core computation dispatched over axis indices.
     template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
     auto compute(const Nominal& orig,
-                   const Shifted& shifted,
-                   const SmearShifted& smear_shifted,
-                   const Weight& nominal_weight,
-                   std::index_sequence<Is...> idxs) const {
-
-      constexpr bool is_container_any = (is_container<std::tuple_element_t<Is, Nominal>> || ...);
-
-      if constexpr(is_container_any) {
-        auto make_range_of_tuples = [](auto const&...xs){ return make_zip_view(make_view(xs)...); };
-
-        auto const orig_v = std::apply(make_range_of_tuples, orig);
-        auto const shifted_v = std::apply(make_range_of_tuples, shifted);
-        auto const smear_shifted_v = std::apply(make_range_of_tuples, smear_shifted);
-
-        auto compute_elem_impl = [this, &nominal_weight, &idxs](auto &orig_elem, auto &shifted_elem, auto&smear_shifted_elem) {
-          return compute_impl(orig_elem, shifted_elem, smear_shifted_elem, nominal_weight, idxs);
-        };
-        auto compute_elem = [&compute_elem_impl](auto const &elem_tuple) { return std::apply(compute_elem_impl, elem_tuple); };
-
-        auto const res_view = make_zip_view(orig_v, shifted_v, smear_shifted_v)
-                              | std::views::transform(compute_elem);
-
-        auto const res = range_to<ROOT::VecOps::RVec>(res_view);
-        return res;
-      }
-      else {
-        return compute_impl(orig, shifted, smear_shifted, nominal_weight, idxs);
-      }
-    }
-
-    /// Core computation dispatched over axis indices.
-    template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
-    auto compute_impl(const Nominal& orig,
                  const Shifted& shifted,
                  const SmearShifted& smear_shifted,
                  const Weight& nominal_weight,
@@ -841,12 +809,18 @@ namespace narf {
     const std::tuple<Axes...> axes_;
   };
 
+  /// Public helper: MapWrapper around HistShiftHelperImpl so container
+  /// arguments are automatically broadcast/zipped element-wise, while scalar
+  /// arguments are passed through directly.
+  template<typename... Axes>
+  using HistShiftHelper = MapWrapper<HistShiftHelperImpl<Axes...>>;
+
   // factory function needed because CTAD doesn't work reliably from cppyy
   // also the trailing return type is needed because cppyy has issues with auto
   // return types
   template <typename... Axes>
   HistShiftHelper<std::decay_t<Axes>...> make_hist_shift_helper(Axes&&... axes) {
-    return HistShiftHelper(std::forward<Axes>(axes)...);
+    return HistShiftHelper<std::decay_t<Axes>...>(std::forward<Axes>(axes)...);
   }
 }
 
