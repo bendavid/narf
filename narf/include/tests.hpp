@@ -251,6 +251,25 @@ namespace narf {
     return true;
   }
 
+  // Test QuantileHelperStatic: edges {0.25, 0.5, 0.75} partition into 4 bins.
+  // Exercise both scalar and container (RVec) call paths via MapWrapper.
+  bool testQuantileHelperStatic() {
+    QuantileHelperStatic<4> helper(std::array<double, 4>{0.25, 0.5, 0.75, 1.0});
+
+    if (helper(0.1) != 0) return false;
+    if (helper(0.25) != 1) return false;
+    if (helper(0.4) != 1) return false;
+    if (helper(0.6) != 2) return false;
+    if (helper(0.9) != 3) return false;
+
+    ROOT::VecOps::RVec<double> vals{0.1, 0.4, 0.6, 0.9};
+    auto res = helper(vals);
+    if (res.size() != 4) return false;
+    if (res[0] != 0 || res[1] != 1 || res[2] != 2 || res[3] != 3) return false;
+
+    return true;
+  }
+
   // Test MapWrapper: constructs a wrapper over a simple callable and applies
   // it over zipped input ranges.
   bool testMapWrapper() {

@@ -619,14 +619,14 @@ namespace narf {
   // The underlying histogram holds a tensor with the bin edges for the quantiles in the last variable,
   // conditional on all the previous variables
   template <typename Storage, typename... Axes>
-  class QuantileHelper : public HistHelper<Storage, Axes...> {
+  class QuantileHelperImpl : public HistHelper<Storage, Axes...> {
     using base_t = HistHelper<Storage, Axes...>;
     using hist_t = typename base_t::hist_t;
     using scalar_t = typename Storage::value_type::tensor_t::Scalar;
     static constexpr auto nquants = Storage::value_type::size;
 
   public:
-    QuantileHelper(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
+    QuantileHelperImpl(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
 
     boost::histogram::axis::index_type operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) const {
       auto const &hist = *base_t::resourceHist_;
@@ -639,6 +639,11 @@ namespace narf {
     }
   };
 
+  // MapWrapper alias so container arguments are automatically broadcast /
+  // zipped element-wise, while scalar arguments call through directly.
+  template <typename Storage, typename... Axes>
+  using QuantileHelper = MapWrapper<QuantileHelperImpl<Storage, Axes...>>;
+
   // CTAD doesn't work reliably from cppyy so add factory function
   template <typename Storage, typename... Axes>
   QuantileHelper<Storage, Axes...> make_quantile_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
@@ -648,11 +653,11 @@ namespace narf {
 
   // simple version for static quantiles
   template<std::size_t N>
-  class QuantileHelperStatic {
+  class QuantileHelperStaticImpl {
   public:
     using edge_t = std::array<double, N>;
 
-    QuantileHelperStatic(const edge_t &edges) : edges_(edges) {}
+    QuantileHelperStaticImpl(const edge_t &edges) : edges_(edges) {}
 
     boost::histogram::axis::index_type operator() (double val) const {
       // find the quantile bin corresponding to the last argument
@@ -664,6 +669,9 @@ namespace narf {
   private:
     const edge_t edges_;
   };
+
+  template<std::size_t N>
+  using QuantileHelperStatic = MapWrapper<QuantileHelperStaticImpl<N>>;
 
   /// Computes the minimum-variance reweighting to approximate a shift
   /// or smearing in the underlying variables of a multidimensional histogram.
