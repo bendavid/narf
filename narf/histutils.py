@@ -719,8 +719,15 @@ def pythonize_rdataframe(klass):
     klass.HistoNDWithBoost = _histond_with_boost
     klass.SumAndCount = _sum_and_count
 
-def build_quantile_hists(df, cols, condaxes, quantaxes):
-    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantile_ints"""
+def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
+    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantile_ints.
+
+    When ``continuous=True`` the original quantile axes are kept as-is in the
+    returned helper histograms (instead of being replaced by ``Integer`` axes).
+    ``define_quantile_ints`` detects this from the axis type and uses the
+    continuous quantile helpers, which return CDF-style values in ``[0, 1]``
+    obtained by linearly interpolating between the stored quantile edges.
+    """
 
     arraxes = condaxes + quantaxes
 
@@ -793,7 +800,13 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
 
             iquantax = iax - ncond
 
-            quantile_integer_axis = hist.axis.Integer(0, axis.size, underflow=False, overflow=False, name=f"{axis.name}_int")
+            if continuous:
+                # Keep the original (Regular / Variable) quantile axis so that
+                # subsequent helpers in the chain can be indexed by the
+                # continuous CDF-style output of the previous helper.
+                quantile_integer_axis = axis
+            else:
+                quantile_integer_axis = hist.axis.Integer(0, axis.size, underflow=False, overflow=False, name=f"{axis.name}_int")
             quantile_integer_axes.append(quantile_integer_axis)
 
             helper_axes = condaxes[:iax+1] + quantile_integer_axes
@@ -807,7 +820,14 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
 
 
 def define_quantile_ints(df, cols, quantile_hists):
-    """Define transformed columns corresponding to conditional quantile bins (integers)"""
+    """Define transformed columns corresponding to conditional quantiles.
+
+    By default the helpers return the integer quantile bin index. If the
+    helper histograms produced by :func:`build_quantile_hists` were built in
+    continuous mode (their trailing quantile axis is not a plain ``Integer``
+    axis), the continuous quantile helpers are used instead, returning a
+    CDF-style value in ``[0, 1]``.
+    """
 
     ncols = len(cols)
     nquant = len(quantile_hists)
@@ -816,22 +836,36 @@ def define_quantile_ints(df, cols, quantile_hists):
     condcols = cols[:ncond]
     quantcols = cols[ncond:]
 
+    # Detect continuous mode from the trailing (quantile) axis of the first
+    # helper histogram: continuous-mode helper histograms preserve the
+    # original (Regular / Variable) quantile axis, integer-mode ones use a
+    # generated Integer axis.
+    continuous = not isinstance(quantile_hists[0].axes[-1], hist.axis.Integer)
+
     helper_cols_cond = condcols.copy()
+
+    suffix = "_quant" if continuous else "_iquant"
 
     for col, quantile_hist in zip(quantcols, quantile_hists):
 
         if len(quantile_hist.axes) > 1:
             helper_hist = narf.hist_to_pyroot_boost(quantile_hist, tensor_rank=1)
-            quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
+            if continuous:
+                quanthelper = ROOT.narf.make_quantile_helper_continuous(ROOT.std.move(helper_hist))
+            else:
+                quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
         else:
             # special case for static quantiles with no conditional variables
             vals = quantile_hist.values()
             arr = ROOT.std.array["double", vals.size](vals)
-            quanthelper = ROOT.narf.QuantileHelperStatic[vals.size](arr)
+            if continuous:
+                quanthelper = ROOT.narf.QuantileHelperStaticContinuous[vals.size](arr)
+            else:
+                quanthelper = ROOT.narf.QuantileHelperStatic[vals.size](arr)
 
         helper_cols = helper_cols_cond + [col]
 
-        outname = f"{col}_iquant"
+        outname = f"{col}{suffix}"
         df = narf.rdfutils.flexible_define(df, outname, quanthelper, helper_cols)
         helper_cols_cond.append(outname)
 
