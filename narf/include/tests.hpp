@@ -3,6 +3,7 @@
 #include "concurrent_flat_map.hpp"
 #include "histutils.hpp"
 #include "matrix_utils.hpp"
+#include "rdfutils.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -247,6 +248,28 @@ namespace narf {
       }
     }
 
+    return true;
+  }
+
+  // Test MapWrapper: constructs a wrapper over a simple callable and applies
+  // it over zipped input ranges.
+  bool testMapWrapper() {
+    auto add = [](int a, int b) { return a + b; };
+    MapWrapper<decltype(add)> wrapper(add);
+
+    // Scalar passthrough: no container args -> callable invoked directly.
+    auto add_scalar = [](int x, int y) { return x + y; };
+    MapWrapper<decltype(add_scalar)> scalar_wrapper(add_scalar);
+    if (scalar_wrapper(2, 5) != 7) return false;
+
+    std::vector<int> a{1, 2, 3, 4};
+    std::vector<int> b{10, 20, 30, 40};
+    auto res = wrapper(a, b);
+    if (res.size() != 4) return false;
+    if (res[0] != 11) return false;
+    if (res[1] != 22) return false;
+    if (res[2] != 33) return false;
+    if (res[3] != 44) return false;
     return true;
   }
 }
