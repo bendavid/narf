@@ -267,16 +267,18 @@ namespace narf {
     if (res.size() != 4) return false;
     if (res[0] != 0 || res[1] != 1 || res[2] != 2 || res[3] != 3) return false;
 
-    // Continuous mode: CDF in [0, 1], edges[i] -> i/(N-1).
+    // Continuous mode: CDF in [0, 1), edges[i] -> i/(N-1), clamped just
+    // below 1.0 so the result always falls within a Regular(N, 0, 1) axis.
     QuantileHelperStaticContinuous<4> helper_c(std::array<double, 4>{0.25, 0.5, 0.75, 1.0});
     auto const eps = 1e-9;
+    auto const max_cdf = std::nextafter(1.0, 0.0);
     if (std::abs(helper_c(0.25) - 0.0) > eps) return false;
     if (std::abs(helper_c(0.5) - 1.0/3.0) > eps) return false;
-    if (std::abs(helper_c(1.0) - 1.0) > eps) return false;
+    if (helper_c(1.0) != max_cdf) return false;
     // val below first edge clamps to 0
     if (std::abs(helper_c(0.0) - 0.0) > eps) return false;
-    // val above last edge clamps to 1
-    if (std::abs(helper_c(2.0) - 1.0) > eps) return false;
+    // val above last edge clamps to max_cdf
+    if (helper_c(2.0) != max_cdf) return false;
     // midpoint of first interval
     if (std::abs(helper_c(0.375) - (1.0/6.0)) > eps) return false;
 
@@ -286,7 +288,7 @@ namespace narf {
     if (std::abs(res_c[0] - 0.0) > eps) return false;
     if (std::abs(res_c[1] - 1.0/3.0) > eps) return false;
     if (std::abs(res_c[2] - 2.0/3.0) > eps) return false;
-    if (std::abs(res_c[3] - 1.0) > eps) return false;
+    if (res_c[3] != max_cdf) return false;
 
     return true;
   }
