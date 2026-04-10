@@ -622,10 +622,10 @@ namespace narf {
   /// When Continuous is false, return the clamped integer bin index (matching
   /// the previous behavior). When Continuous is true, return a CDF-style
   /// double in [0, 1) obtained by linearly interpolating between adjacent
-  /// edges, with edges[i] mapping to i/(N-1) and values outside
-  /// [edges[0], edges[N-1]] clamped. The upper bound is clamped to just below
-  /// 1.0 (via std::nextafter) so that the result always falls within the last
-  /// bin of a Regular(N, 0, 1) axis rather than in the overflow.
+  /// edges. The N stored edges are the right boundaries of N equal-count
+  /// quantile groups, so edges[k] maps to (k+1)/N — the right edge of the
+  /// k-th bin in a Regular(N, 0, 1) axis. Values below edges[0] interpolate
+  /// into [0, 1/N), values above edges[N-1] are clamped to just below 1.0.
   template <bool Continuous, typename It, typename T>
   auto quantile_lookup(It begin, It end, const T &val) {
     const auto n = std::distance(begin, end);
@@ -637,7 +637,7 @@ namespace narf {
       auto const hi = *(begin + i + 1);
       // Guard against degenerate (collapsed) bins where hi == lo.
       double const frac = (hi != lo) ? double(val - lo) / double(hi - lo) : 0.5;
-      double const res = (double(i) + frac) / double(n - 1);
+      double const res = (double(i) + 1.0 + frac) / double(n);
       return std::clamp(res, 0.0, std::nextafter(1.0, 0.0));
     } else {
       return std::clamp<boost::histogram::axis::index_type>(iquant, 0, n - 1);

@@ -267,27 +267,27 @@ namespace narf {
     if (res.size() != 4) return false;
     if (res[0] != 0 || res[1] != 1 || res[2] != 2 || res[3] != 3) return false;
 
-    // Continuous mode: CDF in [0, 1), edges[i] -> i/(N-1), clamped just
-    // below 1.0 so the result always falls within a Regular(N, 0, 1) axis.
+    // Continuous mode: CDF in [0, 1), edges[k] -> (k+1)/N.
+    // With 4 edges {0.25, 0.5, 0.75, 1.0}, edges[0]->1/4, edges[1]->2/4, etc.
     QuantileHelperStaticContinuous<4> helper_c(std::array<double, 4>{0.25, 0.5, 0.75, 1.0});
     auto const eps = 1e-9;
     auto const max_cdf = std::nextafter(1.0, 0.0);
-    if (std::abs(helper_c(0.25) - 0.0) > eps) return false;
-    if (std::abs(helper_c(0.5) - 1.0/3.0) > eps) return false;
+    if (std::abs(helper_c(0.25) - 0.25) > eps) return false;
+    if (std::abs(helper_c(0.5) - 0.5) > eps) return false;
     if (helper_c(1.0) != max_cdf) return false;
     // val below first edge clamps to 0
     if (std::abs(helper_c(0.0) - 0.0) > eps) return false;
     // val above last edge clamps to max_cdf
     if (helper_c(2.0) != max_cdf) return false;
-    // midpoint of first interval
-    if (std::abs(helper_c(0.375) - (1.0/6.0)) > eps) return false;
+    // midpoint of [edges[0], edges[1]]: CDF = (0 + 1 + 0.5) / 4 = 0.375
+    if (std::abs(helper_c(0.375) - 0.375) > eps) return false;
 
     // Container path through MapWrapper
     auto res_c = helper_c(ROOT::VecOps::RVec<double>{0.25, 0.5, 0.75, 1.0});
     if (res_c.size() != 4) return false;
-    if (std::abs(res_c[0] - 0.0) > eps) return false;
-    if (std::abs(res_c[1] - 1.0/3.0) > eps) return false;
-    if (std::abs(res_c[2] - 2.0/3.0) > eps) return false;
+    if (std::abs(res_c[0] - 0.25) > eps) return false;
+    if (std::abs(res_c[1] - 0.5) > eps) return false;
+    if (std::abs(res_c[2] - 0.75) > eps) return false;
     if (res_c[3] != max_cdf) return false;
 
     return true;
