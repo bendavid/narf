@@ -720,11 +720,11 @@ def pythonize_rdataframe(klass):
     klass.SumAndCount = _sum_and_count
 
 def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
-    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantile_ints.
+    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantiles.
 
     When ``continuous=True`` the original quantile axes are kept as-is in the
     returned helper histograms (instead of being replaced by ``Integer`` axes).
-    ``define_quantile_ints`` detects this from the axis type and uses the
+    ``define_quantiles`` detects this from the axis type and uses the
     continuous quantile helpers, which return CDF-style values in ``[0, 1]``
     obtained by linearly interpolating between the stored quantile edges.
 
@@ -883,7 +883,7 @@ def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
     return quantile_hists, centers_hist, volume_hist
 
 
-def define_quantile_ints(df, cols, quantile_hists):
+def define_quantiles(df, cols, quantile_hists, label=""):
     """Define transformed columns corresponding to conditional quantiles.
 
     By default the helpers return the integer quantile bin index. If the
@@ -891,6 +891,11 @@ def define_quantile_ints(df, cols, quantile_hists):
     continuous mode (their trailing quantile axis is not a plain ``Integer``
     axis), the continuous quantile helpers are used instead, returning a
     CDF-style value in ``[0, 1]``.
+
+    An optional ``label`` string is inserted into the output column names
+    (e.g. ``label="plus"`` turns ``col_quant`` into ``col_plus_quant``) so
+    that the same transform can be applied independently to different sets of
+    input columns without naming collisions.
     """
 
     ncols = len(cols)
@@ -909,6 +914,8 @@ def define_quantile_ints(df, cols, quantile_hists):
     helper_cols_cond = condcols.copy()
 
     suffix = "_quant" if continuous else "_iquant"
+    if label:
+        suffix = f"_{label}{suffix}"
 
     for col, quantile_hist in zip(quantcols, quantile_hists):
 

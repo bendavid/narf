@@ -64,7 +64,7 @@ print("centers:", centers_hist)
 print("volumes:", volume_hist)
 
 # define transformed variables with quantile bin indexes
-df, quantile_axes, quantile_cols = narf.histutils.define_quantile_ints(df, cols=condcols+quantcols, quantile_hists=quantile_hists)
+df, quantile_axes, quantile_cols = narf.histutils.define_quantiles(df, cols=condcols+quantcols, quantile_hists=quantile_hists)
 
 # book histograms
 horig = df.HistoBoost("horig", axes, cols)
