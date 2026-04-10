@@ -29,12 +29,8 @@ namespace narf {
         Callable callable_;
     public:
 
-        MapWrapper(const Callable &callable) : callable_(callable) {}
-        MapWrapper(Callable &&callable) : callable_(std::move(callable)) {}
-
         template<typename... CArgs>
-            requires (sizeof...(CArgs) != 1 || (!std::is_same_v<std::decay_t<CArgs>, MapWrapper> && ...)) &&
-                     std::is_constructible_v<Callable, CArgs&&...>
+            requires std::is_constructible_v<Callable, CArgs&&...>
         explicit MapWrapper(CArgs&&... cargs) : callable_(std::forward<CArgs>(cargs)...) {}
 
         template<typename... Args>
