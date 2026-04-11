@@ -171,7 +171,7 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
 
     return pyroot_boost_hist
 
-def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = None, tensor_axes = None, convert_to_hist = True):
+def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = None, tensor_axes = None, convert_to_hist = True, metadata = None):
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
     # of the python hist histogram
@@ -227,7 +227,9 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
                 flat = np.ravel_multi_index(multi, extents, order="C").astype(np.int64)
             else:
                 flat = boost_flat
-            res._sparse_hist = SparseHist._from_flat(flat, vals, python_axes_sparse, size)
+            res._sparse_hist = SparseHist._from_flat(
+                flat, vals, python_axes_sparse, size, metadata=metadata
+            )
             return res._sparse_hist
 
         ret_null = lambda: None
@@ -322,7 +324,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
 
     if convert_to_hist:
-        _hist = hist.Hist(*python_axes, storage = storage, name = name)
+        _hist = hist.Hist(*python_axes, storage = storage, name = name, metadata = metadata)
         arrview = make_array_interface_view(_hist)
 
         helper = ROOT.narf.FillBoostHelperAtomic[type(arrview), type(hfill)](ROOT.std.move(arrview), ROOT.std.move(hfill))
