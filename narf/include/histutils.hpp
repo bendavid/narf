@@ -661,13 +661,15 @@ namespace narf {
     }
   };
 
-  // MapWrapper alias so container arguments are automatically broadcast /
-  // zipped element-wise, while scalar arguments call through directly.
+  // MapWrapper<TensorMapWrapper<Impl>> so that:
+  //  - RVec arguments are broadcast element-wise (MapWrapper)
+  //  - Eigen tensor arguments are broadcast element-wise (TensorMapWrapper)
+  //  - scalar arguments call through directly
   template <typename Storage, typename... Axes>
-  using QuantileHelper = MapWrapper<QuantileHelperImpl<Storage, false, Axes...>>;
+  using QuantileHelper = MapWrapper<TensorMapWrapper<QuantileHelperImpl<Storage, false, Axes...>>>;
 
   template <typename Storage, typename... Axes>
-  using QuantileHelperContinuous = MapWrapper<QuantileHelperImpl<Storage, true, Axes...>>;
+  using QuantileHelperContinuous = MapWrapper<TensorMapWrapper<QuantileHelperImpl<Storage, true, Axes...>>>;
 
   // CTAD doesn't work reliably from cppyy so add factory function
   template <typename Storage, typename... Axes>
@@ -699,10 +701,10 @@ namespace narf {
   };
 
   template<std::size_t N>
-  using QuantileHelperStatic = MapWrapper<QuantileHelperStaticImpl<N, false>>;
+  using QuantileHelperStatic = MapWrapper<TensorMapWrapper<QuantileHelperStaticImpl<N, false>>>;
 
   template<std::size_t N>
-  using QuantileHelperStaticContinuous = MapWrapper<QuantileHelperStaticImpl<N, true>>;
+  using QuantileHelperStaticContinuous = MapWrapper<TensorMapWrapper<QuantileHelperStaticImpl<N, true>>>;
 
   /// Computes the minimum-variance reweighting to approximate a shift
   /// or smearing in the underlying variables of a multidimensional histogram.
