@@ -885,6 +885,202 @@ def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
     return quantile_hists, centers_hist, volume_hist
 
 
+def build_quantile_hists_from_fine(fine_hist, condaxes, quantaxes, continuous=False):
+    """Build quantile helper histograms from a pre-filled finely-binned histogram.
+
+    Takes a single multi-dimensional finely-binned histogram (filled in one
+    event loop) and computes chained conditional quantile edges by cumulative-
+    sum analysis.  Quantile boundaries are restricted to the bin edges of the
+    fine histogram.
+
+    The fine histogram axes must be ``condaxes + fine_quantile_axes`` in order,
+    where each fine quantile axis is a finely-binned version of the
+    corresponding quantile variable covering its full data range.
+
+    Returns ``(quantile_hists, centers_hist, volume_hist)`` with the same
+    format as :func:`build_quantile_hists`.
+    """
+
+    ncond = len(condaxes)
+    nquant = len(quantaxes)
+    fine_axes_all = list(fine_hist.axes)
+    assert len(fine_axes_all) == ncond + nquant, (
+        f"fine_hist has {len(fine_axes_all)} axes, expected {ncond + nquant}"
+    )
+
+    vals = fine_hist.values(flow=True)
+
+    quantile_integer_axes = []
+    quantile_hists_list = []
+    quantile_mins_list = []
+    quantile_maxs_list = []
+
+    for iquant in range(nquant):
+        qax = quantaxes[iquant]
+        nqbins = qax.size
+        fine_ax = fine_axes_all[ncond + iquant]
+        fine_edges = np.asarray(fine_ax.edges, dtype=np.float64)
+        n_fine = fine_ax.size
+        n_fine_flow = fine_ax.extent
+
+        # Project out remaining fine axes (after the current one).
+        projected = vals
+        for _ in range(nquant - iquant - 1):
+            projected = projected.sum(axis=-1)
+        # projected shape: (cond_extents..., [quant_sizes...], fine_extent)
+
+        # Cumulative sum along the last (fine) axis.
+        cumsum = np.cumsum(projected, axis=-1)
+
+        # Map from fine-bin index (flow-inclusive) to variable value at
+        # the right edge of that bin.
+        bin_right = np.empty(n_fine_flow)
+        bin_right[0] = fine_edges[0]
+        bin_right[1 : n_fine + 1] = fine_edges[1:]
+        if n_fine_flow > n_fine + 1:
+            bin_right[-1] = fine_edges[-1]
+
+        bin_left = np.empty(n_fine_flow)
+        bin_left[0] = fine_edges[0]
+        bin_left[1 : n_fine + 1] = fine_edges[:-1]
+        if n_fine_flow > n_fine + 1:
+            bin_left[-1] = fine_edges[-1]
+
+        # Quantile fractions (right edge of each output bin in CDF space).
+        fractions = np.asarray(
+            [qax.edges[j + 1] for j in range(nqbins)], dtype=np.float64
+        )
+
+        # Flatten conditional dimensions for the searchsorted loop.
+        cond_shape = projected.shape[:-1]
+        n_cells = max(1, int(np.prod(cond_shape)))
+        flat_cumsum = cumsum.reshape(n_cells, -1)
+        flat_total = flat_cumsum[:, -1]
+
+        flat_maxs = np.full((n_cells, nqbins), -np.inf)
+        flat_mins = np.full((n_cells, nqbins), np.inf)
+        bin_starts = np.zeros((n_cells, nqbins), dtype=np.int64)
+        bin_ends = np.zeros((n_cells, nqbins), dtype=np.int64)
+
+        for icell in range(n_cells):
+            if flat_total[icell] <= 0:
+                continue
+            prev = 0
+            for iq in range(nqbins):
+                threshold = fractions[iq] * flat_total[icell]
+                idx = int(np.searchsorted(flat_cumsum[icell], threshold))
+                idx = min(idx, n_fine_flow - 1)
+                flat_maxs[icell, iq] = bin_right[idx]
+                if prev < n_fine_flow:
+                    flat_mins[icell, iq] = bin_left[prev]
+                bin_starts[icell, iq] = prev
+                bin_ends[icell, iq] = idx + 1
+                prev = idx + 1
+
+        quantile_maxs = flat_maxs.reshape(cond_shape + (nqbins,))
+        quantile_mins = flat_mins.reshape(cond_shape + (nqbins,))
+
+        # Fix empty-bin infinities (same logic as build_quantile_hists).
+        for iq in range(1, nqbins):
+            quantile_maxs[..., iq] = np.where(
+                quantile_maxs[..., iq] == -np.inf,
+                quantile_maxs[..., iq - 1],
+                quantile_maxs[..., iq],
+            )
+        for iq in range(nqbins - 2, -1, -1):
+            quantile_mins[..., iq] = np.where(
+                quantile_mins[..., iq] == np.inf,
+                quantile_mins[..., iq + 1],
+                quantile_mins[..., iq],
+            )
+        quantile_mins = np.where(
+            quantile_mins == np.inf, quantile_maxs, quantile_mins
+        )
+
+        quantile_mins_list.append(quantile_mins)
+        quantile_maxs_list.append(quantile_maxs)
+
+        # Build the quantile axis for the helper histogram.
+        if continuous:
+            quantile_integer_axis = qax
+        else:
+            quantile_integer_axis = hist.axis.Integer(
+                0, qax.size, underflow=False, overflow=False,
+                name=f"{qax.name}_int",
+            )
+        quantile_integer_axes.append(quantile_integer_axis)
+
+        # Store the helper histogram (quantile max edges).
+        helper_axes = list(condaxes) + list(quantile_integer_axes)
+        helper_hist = hist.Hist(*helper_axes)
+        helper_hist.values(flow=True)[...] = quantile_maxs
+        quantile_hists_list.append(helper_hist)
+
+        # Rebin vals: replace the current fine axis with the quantile axis
+        # by summing fine bins within each quantile bin (contiguous ranges
+        # determined by the cumsum thresholds above).
+        fine_pos = ncond + iquant
+        pre_shape = vals.shape[:fine_pos]
+        post_shape = vals.shape[fine_pos + 1 :]
+        n_pre = max(1, int(np.prod(pre_shape)))
+        n_post = max(1, int(np.prod(post_shape)))
+        flat_vals = vals.reshape(n_pre, vals.shape[fine_pos], n_post)
+        flat_new = np.zeros((n_pre, nqbins, n_post), dtype=vals.dtype)
+        for icell in range(n_pre):
+            for iq in range(nqbins):
+                s = bin_starts[icell, iq]
+                e = bin_ends[icell, iq]
+                if s < e:
+                    flat_new[icell, iq] = flat_vals[icell, s:e].sum(axis=0)
+        new_shape = list(vals.shape)
+        new_shape[fine_pos] = nqbins
+        vals = flat_new.reshape(new_shape)
+
+    # Centers and volumes (same logic as build_quantile_hists).
+    full_shape = (
+        quantile_maxs_list[-1].shape if quantile_maxs_list else ()
+    )
+    per_dim_widths = []
+    per_dim_centers = []
+    for i in range(nquant):
+        widths_i = quantile_maxs_list[i] - quantile_mins_list[i]
+        centers_i = 0.5 * (quantile_maxs_list[i] + quantile_mins_list[i])
+        ndim_extra = nquant - i - 1
+        new_shape = widths_i.shape + (1,) * ndim_extra
+        per_dim_widths.append(
+            np.broadcast_to(widths_i.reshape(new_shape), full_shape)
+        )
+        per_dim_centers.append(
+            np.broadcast_to(centers_i.reshape(new_shape), full_shape)
+        )
+
+    final_axes = list(condaxes) + quantile_integer_axes
+    volume_hist = hist.Hist(*final_axes)
+    if nquant > 0:
+        volume = per_dim_widths[0].copy()
+        for w in per_dim_widths[1:]:
+            volume *= w
+        volume_hist.values(flow=True)[...] = volume
+
+        coord_names = []
+        for i, ax in enumerate(quantaxes):
+            name = getattr(ax, "name", "") or ""
+            if not name or name in coord_names:
+                name = f"quant_{i}"
+            coord_names.append(name)
+        coord_axis = hist.axis.StrCategory(
+            coord_names, name="coord", overflow=False
+        )
+        centers_hist = hist.Hist(*final_axes, coord_axis)
+        centers_hist.values(flow=True)[...] = np.stack(
+            per_dim_centers, axis=-1
+        )
+    else:
+        centers_hist = hist.Hist(*final_axes)
+
+    return quantile_hists_list, centers_hist, volume_hist
+
+
 def define_quantiles(df, cols, quantile_hists, label=""):
     """Define transformed columns corresponding to conditional quantiles.
 
