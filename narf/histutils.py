@@ -827,19 +827,43 @@ def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
 
             iquantax = iax - ncond
 
+            # Output quantile axis: N bins, used as conditioning axis for
+            # later helpers and as the bin axis of centers/volume hists.
             if continuous:
-                # Keep the original (Regular / Variable) quantile axis so that
-                # subsequent helpers in the chain can be indexed by the
-                # continuous CDF-style output of the previous helper.
                 quantile_integer_axis = axis
             else:
                 quantile_integer_axis = hist.axis.Integer(0, axis.size, underflow=False, overflow=False, name=f"{axis.name}_int")
             quantile_integer_axes.append(quantile_integer_axis)
 
-            helper_axes = condaxes[:iax+1] + quantile_integer_axes
+            # Helper histogram: N + 1 storage slots in both modes:
+            # edges[0] = left boundary of bin 0 (observed minimum of first
+            # quantile bin, where CDF = 0), edges[1..N] = right boundaries.
+            # Uniform layout gives bin 0 its own dedicated segment.
+            if continuous:
+                storage_axis = hist.axis.Regular(
+                    axis.size + 1, 0.0, 1.0,
+                    name=f"{axis.name}_edges",
+                    underflow=False, overflow=False,
+                )
+            else:
+                storage_axis = hist.axis.Integer(
+                    0, axis.size + 1,
+                    underflow=False, overflow=False,
+                    name=f"{axis.name}_edges_int",
+                )
+            helper_axes = (
+                condaxes[:iax+1] + quantile_integer_axes[:-1]
+                + [storage_axis]
+            )
 
             helper_hist = hist.Hist(*helper_axes)
-            helper_hist.values(flow=True)[...] = quantile_edges
+            val_min_arr = quantile_mins[..., 0:1].astype(
+                quantile_edges.dtype, copy=False
+            )
+            stored_edges = np.concatenate(
+                [val_min_arr, quantile_edges], axis=-1
+            )
+            helper_hist.values(flow=True)[...] = stored_edges
 
             quantile_hists.append(helper_hist)
 
@@ -1000,7 +1024,10 @@ def build_quantile_hists_from_fine(fine_hist, condaxes, quantaxes, continuous=Fa
         quantile_mins_list.append(quantile_mins)
         quantile_maxs_list.append(quantile_maxs)
 
-        # Build the quantile axis for the helper histogram.
+        # Output quantile axis: indexes the N quantile bins and is used
+        # both as the conditioning axis for later helpers in the chain
+        # and as the bin axis of the returned centers/volume hists.
+        # Always N bins, independent of integer vs continuous mode.
         if continuous:
             quantile_integer_axis = qax
         else:
@@ -1010,10 +1037,41 @@ def build_quantile_hists_from_fine(fine_hist, condaxes, quantaxes, continuous=Fa
             )
         quantile_integer_axes.append(quantile_integer_axis)
 
-        # Store the helper histogram (quantile max edges).
-        helper_axes = list(condaxes) + list(quantile_integer_axes)
+        # Helper histogram: stores per-conditional-cell edge tensor for
+        # the C++ quantile_lookup. In both modes the last axis has N + 1
+        # slots: edges[0] = left boundary of bin 0 (the fine-axis lower
+        # edge, where CDF = 0), edges[1..N] = right boundaries of the N
+        # bins. The uniform N + 1 layout gives each bin — including the
+        # first — its own dedicated segment in the CDF and its own
+        # dedicated bin index under iquant - 1 clamp. Integer mode uses
+        # an Integer(0, N+1) storage axis so define_quantiles' isinstance
+        # check keeps detecting the mode.
+        if continuous:
+            storage_axis = hist.axis.Regular(
+                nqbins + 1, 0.0, 1.0,
+                name=f"{qax.name}_edges",
+                underflow=False, overflow=False,
+            )
+        else:
+            storage_axis = hist.axis.Integer(
+                0, nqbins + 1,
+                underflow=False, overflow=False,
+                name=f"{qax.name}_edges_int",
+            )
+        helper_axes = (
+            list(condaxes) + list(quantile_integer_axes[:-1])
+            + [storage_axis]
+        )
         helper_hist = hist.Hist(*helper_axes)
-        helper_hist.values(flow=True)[...] = quantile_maxs
+        val_min = float(fine_edges[0])
+        lead_shape = quantile_maxs.shape[:-1] + (1,)
+        val_min_arr = np.full(
+            lead_shape, val_min, dtype=quantile_maxs.dtype
+        )
+        stored_edges = np.concatenate(
+            [val_min_arr, quantile_maxs], axis=-1
+        )
+        helper_hist.values(flow=True)[...] = stored_edges
         quantile_hists_list.append(helper_hist)
 
         # Rebin vals: replace the current fine axis with the quantile axis

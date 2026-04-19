@@ -619,28 +619,37 @@ namespace narf {
   // The underlying histogram holds a tensor with the bin edges for the quantiles in the last variable,
   // conditional on all the previous variables
   /// Look up the quantile bin for `val` in the sorted edge array [begin, end).
-  /// When Continuous is false, return the clamped integer bin index (matching
-  /// the previous behavior). When Continuous is true, return a CDF-style
-  /// double in [0, 1) obtained by linearly interpolating between adjacent
-  /// edges. The N stored edges are the right boundaries of N equal-count
-  /// quantile groups, so edges[k] maps to (k+1)/N — the right edge of the
-  /// k-th bin in a Regular(N, 0, 1) axis. Values below edges[0] interpolate
-  /// into [0, 1/N), values above edges[N-1] are clamped to just below 1.0.
+  ///
+  /// Edge layout is the same in both modes: the ``n`` stored edges are
+  /// ``[val_min, e_0, e_1, ..., e_{N-1}]`` where ``val_min`` is the left
+  /// boundary of the first quantile bin (where ``CDF = 0``) and
+  /// ``e_k = edges[k+1]`` is the right boundary of the ``k``-th quantile
+  /// bin. So ``nbins = n - 1`` quantile bins are encoded by ``n`` edges.
+  ///
+  /// * ``Continuous = false`` (integer mode): returns the clamped integer
+  ///   bin index ``i ∈ [0, nbins - 1]``.
+  ///
+  /// * ``Continuous = true`` (continuous CDF mode): returns a CDF-style
+  ///   double in ``[0, 1)`` obtained by linear interpolation on segment
+  ///   ``i`` (from ``edges[i]`` at ``CDF = i/nbins`` to ``edges[i+1]`` at
+  ///   ``CDF = (i+1)/nbins``). Every bin — including the first and last —
+  ///   gets its own dedicated slope.
   template <bool Continuous, typename It, typename T>
   auto quantile_lookup(It begin, It end, const T &val) {
     const auto n = std::distance(begin, end);
     auto const upper = std::upper_bound(begin, end, val);
     auto const iquant = std::distance(begin, upper);
+    const std::ptrdiff_t nbins = n - 1;
+    auto const i = std::clamp<std::ptrdiff_t>(iquant - 1, 0, nbins - 1);
     if constexpr (Continuous) {
-      auto const i = std::clamp<std::ptrdiff_t>(iquant - 1, 0, n - 2);
       auto const lo = *(begin + i);
       auto const hi = *(begin + i + 1);
       // Guard against degenerate (collapsed) bins where hi == lo.
       double const frac = (hi != lo) ? double(val - lo) / double(hi - lo) : 0.5;
-      double const res = (double(i) + 1.0 + frac) / double(n);
+      double const res = (double(i) + frac) / double(nbins);
       return std::clamp(res, 0.0, std::nextafter(1.0, 0.0));
     } else {
-      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, n - 1);
+      return static_cast<boost::histogram::axis::index_type>(i);
     }
   }
 
