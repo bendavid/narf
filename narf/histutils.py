@@ -19,6 +19,24 @@ narf.clingutils.Declare('#include "FillBoostHelperAtomic.hpp"')
 narf.clingutils.Declare('#include <eigen3/Eigen/Dense>')
 narf.clingutils.Declare('#include <eigen3/unsupported/Eigen/CXX11/Tensor>')
 
+class SparseStorage:
+    """Storage option for HistoBoost selecting a narf::concurrent_sparse_storage
+    backed by a narf::concurrent_flat_map. Conversion to a python hist.Hist
+    object is not supported in this mode.
+
+    Parameters
+    ----------
+    fill_fraction : float
+        Estimated fraction of bins (including under/overflow) that will be
+        populated. Used to size the underlying concurrent_flat_map so that
+        most fills hit the initial allocation rather than triggering
+        on-the-fly expansion. Values outside (0, 1] are accepted; pass a
+        small number for very sparse fills.
+    """
+    def __init__(self, fill_fraction=0.1):
+        self.fill_fraction = float(fill_fraction)
+
+
 def bool_to_string(b):
     if b:
         return "true"
@@ -114,7 +132,7 @@ def make_array_interface_view(boost_hist):
         
     underflow = [axis.traits.underflow for axis in boost_hist.axes]
 
-    acc_type = convert_storage_type(boost_hist._storage_type)
+    acc_type = convert_storage_type(boost_hist.storage_type)
     arrview = ROOT.narf.array_interface_view[acc_type, len(shape)](arr, shape, strides, underflow)
 
     return arrview
@@ -132,9 +150,9 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
         scalar_type = ROOT.double
         dimensions = ROOT.Eigen.Sizes[tuple(tensor_sizes)]
 
-        if issubclass(hist_hist._storage_type, bh.storage.Double):
+        if issubclass(hist_hist.storage_type, bh.storage.Double):
             cppstoragetype = ROOT.narf.tensor_accumulator[scalar_type, dimensions]
-        elif issubclass(hist_hist._storage_type, bh.storage.Weight):
+        elif issubclass(hist_hist.storage_type, bh.storage.Weight):
             cppstoragetype = ROOT.narf.tensor_accumulator[ROOT.boost.histogram.accumulators.weighted_sum[scalar_type], dimensions]
         else:
             raise TypeError("Requested storage type is not supported with tensor weights currently")
@@ -143,7 +161,7 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
             cppstoragetype = ROOT.narf.atomic_adaptor[cppstoragetype]
     else:
         python_axes = hist_hist.axes
-        cppstoragetype = convert_storage_type(hist_hist._storage_type, force_atomic = force_atomic)
+        cppstoragetype = convert_storage_type(hist_hist.storage_type, force_atomic = force_atomic)
 
     cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in python_axes]
 
@@ -153,13 +171,75 @@ def hist_to_pyroot_boost(hist_hist, tensor_rank = 0, force_atomic = False):
 
     return pyroot_boost_hist
 
-def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = None, tensor_axes = None, convert_to_hist = True):
+def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atomic = None, tensor_axes = None, convert_to_hist = True, metadata = None):
     # first construct a histogram from the hist python interface, then construct a boost histogram
     # using PyROOT with compatible axes and storage types, adopting the underlying storage
     # of the python hist histogram
 
     if force_atomic is None:
         force_atomic = ROOT.ROOT.IsImplicitMTEnabled()
+
+    # Sparse storage path: build a narf::sparse_histogram backed by a
+    # concurrent_flat_map. The result is exposed as a wums.SparseHist.
+    if isinstance(storage, SparseStorage):
+        if tensor_axes is not None:
+            raise NotImplementedError("Tensor weights are not supported with SparseStorage")
+        coltypes = [df.GetColumnType(col) for col in cols]
+        for coltype in coltypes[len(axes):]:
+            traits = ROOT.narf.tensor_traits[coltype]
+            if traits.is_tensor:
+                raise NotImplementedError("Tensor weights are not supported with SparseStorage")
+        cppaxes = [ROOT.std.move(convert_axis(axis)) for axis in axes]
+        hfill = ROOT.narf.make_histogram_sparse[ROOT.narf.atomic_adaptor[ROOT.double]](storage.fill_fraction, *cppaxes)
+        helper = ROOT.narf.FillBoostHelperAtomic[type(hfill)](ROOT.std.move(hfill))
+        targs = tuple([type(df), type(helper)] + coltypes)
+        res = ROOT.narf.book_helper[targs](df, ROOT.std.move(helper), cols)
+
+        if not convert_to_hist:
+            return res
+
+        # Lazily convert the underlying C++ sparse histogram to a wums.SparseHist
+        # the first time the result is dereferenced.
+        from wums.sparse_hist import SparseHist
+
+        res._GetPtr = res.GetPtr
+        res._sparse_hist = None
+        python_axes_sparse = list(axes)
+
+        def _build_sparse():
+            if res._sparse_hist is not None:
+                return res._sparse_hist
+            cpp_hist = res._GetPtr()
+            snapshot = ROOT.narf.sparse_histogram_snapshot(cpp_hist)
+            n = len(snapshot)
+            boost_flat = np.empty(n, dtype=np.int64)
+            vals = np.empty(n, dtype=np.float64)
+            for i, kv in enumerate(snapshot):
+                boost_flat[i] = int(kv.first)
+                vals[i] = float(kv.second)
+            extents = tuple(int(ax.extent) for ax in python_axes_sparse)
+            size = int(np.prod(extents)) if extents else 1
+            # boost::histogram linearizes column-major (leftmost axis = stride 1),
+            # but wums.SparseHist expects numpy row-major (C order). Remap by
+            # un-raveling under F order and re-raveling under C order.
+            if n and len(extents) > 1:
+                multi = np.unravel_index(boost_flat, extents, order="F")
+                flat = np.ravel_multi_index(multi, extents, order="C").astype(np.int64)
+            else:
+                flat = boost_flat
+            res._sparse_hist = SparseHist._from_flat(
+                flat, vals, python_axes_sparse, size, metadata=metadata
+            )
+            return res._sparse_hist
+
+        ret_null = lambda: None
+        res.__deref__ = _build_sparse
+        res.__follow__ = _build_sparse
+        res.begin = ret_null
+        res.end = ret_null
+        res.GetPtr = _build_sparse
+        res.GetValue = _build_sparse
+        return res
 
     #TODO some of this code can be shared with root histogram version
 
@@ -244,7 +324,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
 
 
     if convert_to_hist:
-        _hist = hist.Hist(*python_axes, storage = storage, name = name)
+        _hist = hist.Hist(*python_axes, storage = storage, name = name, metadata = metadata)
         arrview = make_array_interface_view(_hist)
 
         helper = ROOT.narf.FillBoostHelperAtomic[type(arrview), type(hfill)](ROOT.std.move(arrview), ROOT.std.move(hfill))
@@ -641,8 +721,23 @@ def pythonize_rdataframe(klass):
     klass.HistoNDWithBoost = _histond_with_boost
     klass.SumAndCount = _sum_and_count
 
-def build_quantile_hists(df, cols, condaxes, quantaxes):
-    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantile_ints"""
+def build_quantile_hists(df, cols, condaxes, quantaxes, continuous=False):
+    """Build histograms which encode conditional quantiles for the provided variables, to be used with define_quantiles.
+
+    When ``continuous=True`` the original quantile axes are kept as-is in the
+    returned helper histograms (instead of being replaced by ``Integer`` axes).
+    ``define_quantiles`` detects this from the axis type and uses the
+    continuous quantile helpers, which return CDF-style values in ``[0, 1]``
+    obtained by linearly interpolating between the stored quantile edges.
+
+    Returns a tuple ``(quantile_hists, centers_hist, volume_hist)`` where
+    ``centers_hist`` gives the multidimensional center (one component per
+    quantile variable, along an extra ``coord`` ``StrCategory`` axis labelled
+    with the input quantile axis names when available) of each final
+    transformed quantile bin, and ``volume_hist`` gives the product of the
+    per-dimension widths of the same bin, both indexed by the full set of
+    conditional and (integer or original) quantile axes.
+    """
 
     arraxes = condaxes + quantaxes
 
@@ -678,6 +773,8 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
 
     quantile_integer_axes = []
     quantile_hists = []
+    quantile_mins_list = []
+    quantile_maxs_list = []
 
 
     for iax, (col, axis) in enumerate(zip(cols, arraxes)):
@@ -707,29 +804,355 @@ def build_quantile_hists(df, cols, condaxes, quantaxes):
             quantile_edges = np.reshape(quantile_edges, shape_final[:iax+1])
             quantile_edges = ak.to_numpy(quantile_edges)
 
+            quantile_mins = ak.min(arr[..., col], axis=-1, mask_identity=False)
+            quantile_mins = np.reshape(quantile_mins, shape_final[:iax+1])
+            quantile_mins = ak.to_numpy(quantile_mins)
+
             # replace -infinity from empty values with the previous bin edge
             # so that the quantile edges are at least still monotonic
             nquants = quantile_edges.shape[-1]
             for iquant in range(1, nquants):
                 quantile_edges[..., iquant] = np.where(quantile_edges[..., iquant]==-np.inf, quantile_edges[..., iquant-1], quantile_edges[..., iquant])
 
+            # replace +infinity from empty values with the next bin's min,
+            # keeping mins monotonic and avoiding negative bin widths; any
+            # remaining +infinities (trailing empty bins) fall back to the
+            # corresponding max so the bin collapses to zero width.
+            for iquant in range(nquants - 2, -1, -1):
+                quantile_mins[..., iquant] = np.where(quantile_mins[..., iquant]==np.inf, quantile_mins[..., iquant+1], quantile_mins[..., iquant])
+            quantile_mins = np.where(quantile_mins==np.inf, quantile_edges, quantile_mins)
+
+            quantile_mins_list.append(quantile_mins)
+            quantile_maxs_list.append(quantile_edges)
+
             iquantax = iax - ncond
 
-            quantile_integer_axis = hist.axis.Integer(0, axis.size, underflow=False, overflow=False, name=f"{axis.name}_int")
+            # Output quantile axis: N bins, used as conditioning axis for
+            # later helpers and as the bin axis of centers/volume hists.
+            if continuous:
+                quantile_integer_axis = axis
+            else:
+                quantile_integer_axis = hist.axis.Integer(0, axis.size, underflow=False, overflow=False, name=f"{axis.name}_int")
             quantile_integer_axes.append(quantile_integer_axis)
 
-            helper_axes = condaxes[:iax+1] + quantile_integer_axes
+            # Helper histogram: N + 1 storage slots in both modes:
+            # edges[0] = left boundary of bin 0 (observed minimum of first
+            # quantile bin, where CDF = 0), edges[1..N] = right boundaries.
+            # Uniform layout gives bin 0 its own dedicated segment.
+            if continuous:
+                storage_axis = hist.axis.Regular(
+                    axis.size + 1, 0.0, 1.0,
+                    name=f"{axis.name}_edges",
+                    underflow=False, overflow=False,
+                )
+            else:
+                storage_axis = hist.axis.Integer(
+                    0, axis.size + 1,
+                    underflow=False, overflow=False,
+                    name=f"{axis.name}_edges_int",
+                )
+            helper_axes = (
+                condaxes[:iax+1] + quantile_integer_axes[:-1]
+                + [storage_axis]
+            )
 
             helper_hist = hist.Hist(*helper_axes)
-            helper_hist.values(flow=True)[...] = quantile_edges
+            val_min_arr = quantile_mins[..., 0:1].astype(
+                quantile_edges.dtype, copy=False
+            )
+            stored_edges = np.concatenate(
+                [val_min_arr, quantile_edges], axis=-1
+            )
+            helper_hist.values(flow=True)[...] = stored_edges
 
             quantile_hists.append(helper_hist)
 
-    return quantile_hists
+    # Compute multidim centers and volumes for the final transformed bins.
+    # Each per-axis widths/centers array has shape covering only the
+    # conditional dims plus the quantile dims up to that axis; broadcast to
+    # the full (cond + all quant) shape and combine.
+    full_shape = tuple(shape_final)
+    per_dim_widths = []
+    per_dim_centers = []
+    for i in range(nquant):
+        mins_i = quantile_mins_list[i]
+        maxs_i = quantile_maxs_list[i]
+        widths_i = maxs_i - mins_i
+        centers_i = 0.5 * (maxs_i + mins_i)
+        ndim_extra = nquant - i - 1
+        new_shape = widths_i.shape + (1,) * ndim_extra
+        per_dim_widths.append(np.broadcast_to(widths_i.reshape(new_shape), full_shape))
+        per_dim_centers.append(np.broadcast_to(centers_i.reshape(new_shape), full_shape))
+
+    final_axes = condaxes + quantile_integer_axes
+    volume_hist = hist.Hist(*final_axes)
+    if nquant > 0:
+        volume = per_dim_widths[0].copy()
+        for w in per_dim_widths[1:]:
+            volume = volume * w
+        volume_hist.values(flow=True)[...] = volume
+
+        # Use the input quantile axis names as labels on the coord axis, with
+        # a unique placeholder for any unnamed axis.
+        coord_names = []
+        for i, ax in enumerate(quantaxes):
+            name = getattr(ax, "name", "") or ""
+            if not name or name in coord_names:
+                name = f"quant_{i}"
+            coord_names.append(name)
+        coord_axis = hist.axis.StrCategory(coord_names, name="coord", overflow=False)
+        centers_hist = hist.Hist(*final_axes, coord_axis)
+        centers_hist.values(flow=True)[...] = np.stack(per_dim_centers, axis=-1)
+    else:
+        centers_hist = hist.Hist(*final_axes)
+
+    return quantile_hists, centers_hist, volume_hist
 
 
-def define_quantile_ints(df, cols, quantile_hists):
-    """Define transformed columns corresponding to conditional quantile bins (integers)"""
+def build_quantile_hists_from_fine(fine_hist, condaxes, quantaxes, continuous=False):
+    """Build quantile helper histograms from a pre-filled finely-binned histogram.
+
+    Takes a single multi-dimensional finely-binned histogram (filled in one
+    event loop) and computes chained conditional quantile edges by cumulative-
+    sum analysis.  Quantile boundaries are restricted to the bin edges of the
+    fine histogram.
+
+    The fine histogram axes must be ``condaxes + fine_quantile_axes`` in order,
+    where each fine quantile axis is a finely-binned version of the
+    corresponding quantile variable covering its full data range.
+
+    Returns ``(quantile_hists, centers_hist, volume_hist)`` with the same
+    format as :func:`build_quantile_hists`.
+    """
+
+    ncond = len(condaxes)
+    nquant = len(quantaxes)
+    fine_axes_all = list(fine_hist.axes)
+    assert len(fine_axes_all) == ncond + nquant, (
+        f"fine_hist has {len(fine_axes_all)} axes, expected {ncond + nquant}"
+    )
+
+    vals = fine_hist.values(flow=True)
+
+    quantile_integer_axes = []
+    quantile_hists_list = []
+    quantile_mins_list = []
+    quantile_maxs_list = []
+
+    for iquant in range(nquant):
+        qax = quantaxes[iquant]
+        nqbins = qax.size
+        fine_ax = fine_axes_all[ncond + iquant]
+        fine_edges = np.asarray(fine_ax.edges, dtype=np.float64)
+        n_fine = fine_ax.size
+        n_fine_flow = fine_ax.extent
+
+        # Project out remaining fine axes (after the current one).
+        projected = vals
+        for _ in range(nquant - iquant - 1):
+            projected = projected.sum(axis=-1)
+        # projected shape: (cond_extents..., [quant_sizes...], fine_extent)
+
+        # Cumulative sum along the last (fine) axis.
+        cumsum = np.cumsum(projected, axis=-1)
+
+        # Map from fine-bin index (flow-inclusive) to variable value at
+        # the right edge of that bin.
+        bin_right = np.empty(n_fine_flow)
+        bin_right[0] = fine_edges[0]
+        bin_right[1 : n_fine + 1] = fine_edges[1:]
+        if n_fine_flow > n_fine + 1:
+            bin_right[-1] = fine_edges[-1]
+
+        bin_left = np.empty(n_fine_flow)
+        bin_left[0] = fine_edges[0]
+        bin_left[1 : n_fine + 1] = fine_edges[:-1]
+        if n_fine_flow > n_fine + 1:
+            bin_left[-1] = fine_edges[-1]
+
+        # Quantile fractions (right edge of each output bin in CDF space).
+        fractions = np.asarray(
+            [qax.edges[j + 1] for j in range(nqbins)], dtype=np.float64
+        )
+
+        # Flatten conditional dimensions for the searchsorted loop.
+        cond_shape = projected.shape[:-1]
+        n_cells = max(1, int(np.prod(cond_shape)))
+        flat_cumsum = cumsum.reshape(n_cells, -1)
+        flat_total = flat_cumsum[:, -1]
+
+        flat_maxs = np.full((n_cells, nqbins), -np.inf)
+        flat_mins = np.full((n_cells, nqbins), np.inf)
+        bin_starts = np.zeros((n_cells, nqbins), dtype=np.int64)
+        bin_ends = np.zeros((n_cells, nqbins), dtype=np.int64)
+
+        for icell in range(n_cells):
+            if flat_total[icell] <= 0:
+                continue
+            prev = 0
+            for iq in range(nqbins):
+                threshold = fractions[iq] * flat_total[icell]
+                idx = int(np.searchsorted(flat_cumsum[icell], threshold))
+                idx = min(idx, n_fine_flow - 1)
+                flat_maxs[icell, iq] = bin_right[idx]
+                if prev < n_fine_flow:
+                    flat_mins[icell, iq] = bin_left[prev]
+                bin_starts[icell, iq] = prev
+                bin_ends[icell, iq] = idx + 1
+                prev = idx + 1
+
+        quantile_maxs = flat_maxs.reshape(cond_shape + (nqbins,))
+        quantile_mins = flat_mins.reshape(cond_shape + (nqbins,))
+
+        # Fix empty-bin infinities (same logic as build_quantile_hists).
+        for iq in range(1, nqbins):
+            quantile_maxs[..., iq] = np.where(
+                quantile_maxs[..., iq] == -np.inf,
+                quantile_maxs[..., iq - 1],
+                quantile_maxs[..., iq],
+            )
+        for iq in range(nqbins - 2, -1, -1):
+            quantile_mins[..., iq] = np.where(
+                quantile_mins[..., iq] == np.inf,
+                quantile_mins[..., iq + 1],
+                quantile_mins[..., iq],
+            )
+        quantile_mins = np.where(
+            quantile_mins == np.inf, quantile_maxs, quantile_mins
+        )
+
+        quantile_mins_list.append(quantile_mins)
+        quantile_maxs_list.append(quantile_maxs)
+
+        # Output quantile axis: indexes the N quantile bins and is used
+        # both as the conditioning axis for later helpers in the chain
+        # and as the bin axis of the returned centers/volume hists.
+        # Always N bins, independent of integer vs continuous mode.
+        if continuous:
+            quantile_integer_axis = qax
+        else:
+            quantile_integer_axis = hist.axis.Integer(
+                0, qax.size, underflow=False, overflow=False,
+                name=f"{qax.name}_int",
+            )
+        quantile_integer_axes.append(quantile_integer_axis)
+
+        # Helper histogram: stores per-conditional-cell edge tensor for
+        # the C++ quantile_lookup. In both modes the last axis has N + 1
+        # slots: edges[0] = left boundary of bin 0 (the fine-axis lower
+        # edge, where CDF = 0), edges[1..N] = right boundaries of the N
+        # bins. The uniform N + 1 layout gives each bin — including the
+        # first — its own dedicated segment in the CDF and its own
+        # dedicated bin index under iquant - 1 clamp. Integer mode uses
+        # an Integer(0, N+1) storage axis so define_quantiles' isinstance
+        # check keeps detecting the mode.
+        if continuous:
+            storage_axis = hist.axis.Regular(
+                nqbins + 1, 0.0, 1.0,
+                name=f"{qax.name}_edges",
+                underflow=False, overflow=False,
+            )
+        else:
+            storage_axis = hist.axis.Integer(
+                0, nqbins + 1,
+                underflow=False, overflow=False,
+                name=f"{qax.name}_edges_int",
+            )
+        helper_axes = (
+            list(condaxes) + list(quantile_integer_axes[:-1])
+            + [storage_axis]
+        )
+        helper_hist = hist.Hist(*helper_axes)
+        val_min = float(fine_edges[0])
+        lead_shape = quantile_maxs.shape[:-1] + (1,)
+        val_min_arr = np.full(
+            lead_shape, val_min, dtype=quantile_maxs.dtype
+        )
+        stored_edges = np.concatenate(
+            [val_min_arr, quantile_maxs], axis=-1
+        )
+        helper_hist.values(flow=True)[...] = stored_edges
+        quantile_hists_list.append(helper_hist)
+
+        # Rebin vals: replace the current fine axis with the quantile axis
+        # by summing fine bins within each quantile bin (contiguous ranges
+        # determined by the cumsum thresholds above).
+        fine_pos = ncond + iquant
+        pre_shape = vals.shape[:fine_pos]
+        post_shape = vals.shape[fine_pos + 1 :]
+        n_pre = max(1, int(np.prod(pre_shape)))
+        n_post = max(1, int(np.prod(post_shape)))
+        flat_vals = vals.reshape(n_pre, vals.shape[fine_pos], n_post)
+        flat_new = np.zeros((n_pre, nqbins, n_post), dtype=vals.dtype)
+        for icell in range(n_pre):
+            for iq in range(nqbins):
+                s = bin_starts[icell, iq]
+                e = bin_ends[icell, iq]
+                if s < e:
+                    flat_new[icell, iq] = flat_vals[icell, s:e].sum(axis=0)
+        new_shape = list(vals.shape)
+        new_shape[fine_pos] = nqbins
+        vals = flat_new.reshape(new_shape)
+
+    # Centers and volumes (same logic as build_quantile_hists).
+    full_shape = (
+        quantile_maxs_list[-1].shape if quantile_maxs_list else ()
+    )
+    per_dim_widths = []
+    per_dim_centers = []
+    for i in range(nquant):
+        widths_i = quantile_maxs_list[i] - quantile_mins_list[i]
+        centers_i = 0.5 * (quantile_maxs_list[i] + quantile_mins_list[i])
+        ndim_extra = nquant - i - 1
+        new_shape = widths_i.shape + (1,) * ndim_extra
+        per_dim_widths.append(
+            np.broadcast_to(widths_i.reshape(new_shape), full_shape)
+        )
+        per_dim_centers.append(
+            np.broadcast_to(centers_i.reshape(new_shape), full_shape)
+        )
+
+    final_axes = list(condaxes) + quantile_integer_axes
+    volume_hist = hist.Hist(*final_axes)
+    if nquant > 0:
+        volume = per_dim_widths[0].copy()
+        for w in per_dim_widths[1:]:
+            volume *= w
+        volume_hist.values(flow=True)[...] = volume
+
+        coord_names = []
+        for i, ax in enumerate(quantaxes):
+            name = getattr(ax, "name", "") or ""
+            if not name or name in coord_names:
+                name = f"quant_{i}"
+            coord_names.append(name)
+        coord_axis = hist.axis.StrCategory(
+            coord_names, name="coord", overflow=False
+        )
+        centers_hist = hist.Hist(*final_axes, coord_axis)
+        centers_hist.values(flow=True)[...] = np.stack(
+            per_dim_centers, axis=-1
+        )
+    else:
+        centers_hist = hist.Hist(*final_axes)
+
+    return quantile_hists_list, centers_hist, volume_hist
+
+
+def define_quantiles(df, cols, quantile_hists, label=""):
+    """Define transformed columns corresponding to conditional quantiles.
+
+    By default the helpers return the integer quantile bin index. If the
+    helper histograms produced by :func:`build_quantile_hists` were built in
+    continuous mode (their trailing quantile axis is not a plain ``Integer``
+    axis), the continuous quantile helpers are used instead, returning a
+    CDF-style value in ``[0, 1]``.
+
+    An optional ``label`` string is inserted into the output column names
+    (e.g. ``label="plus"`` turns ``col_quant`` into ``col_plus_quant``) so
+    that the same transform can be applied independently to different sets of
+    input columns without naming collisions.
+    """
 
     ncols = len(cols)
     nquant = len(quantile_hists)
@@ -738,23 +1161,39 @@ def define_quantile_ints(df, cols, quantile_hists):
     condcols = cols[:ncond]
     quantcols = cols[ncond:]
 
+    # Detect continuous mode from the trailing (quantile) axis of the first
+    # helper histogram: continuous-mode helper histograms preserve the
+    # original (Regular / Variable) quantile axis, integer-mode ones use a
+    # generated Integer axis.
+    continuous = not isinstance(quantile_hists[0].axes[-1], hist.axis.Integer)
+
     helper_cols_cond = condcols.copy()
+
+    suffix = "_quant" if continuous else "_iquant"
+    if label:
+        suffix = f"_{label}{suffix}"
 
     for col, quantile_hist in zip(quantcols, quantile_hists):
 
         if len(quantile_hist.axes) > 1:
             helper_hist = narf.hist_to_pyroot_boost(quantile_hist, tensor_rank=1)
-            quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
+            if continuous:
+                quanthelper = ROOT.narf.make_quantile_helper_continuous(ROOT.std.move(helper_hist))
+            else:
+                quanthelper = ROOT.narf.make_quantile_helper(ROOT.std.move(helper_hist))
         else:
             # special case for static quantiles with no conditional variables
             vals = quantile_hist.values()
             arr = ROOT.std.array["double", vals.size](vals)
-            quanthelper = ROOT.narf.QuantileHelperStatic[vals.size](arr)
+            if continuous:
+                quanthelper = ROOT.narf.QuantileHelperStaticContinuous[vals.size](arr)
+            else:
+                quanthelper = ROOT.narf.QuantileHelperStatic[vals.size](arr)
 
         helper_cols = helper_cols_cond + [col]
 
-        outname = f"{col}_iquant"
-        df = df.Define(outname, quanthelper, helper_cols)
+        outname = f"{col}{suffix}"
+        df = narf.rdfutils.flexible_define(df, outname, quanthelper, helper_cols)
         helper_cols_cond.append(outname)
 
     quantile_axes = list(quantile_hists[-1].axes)
