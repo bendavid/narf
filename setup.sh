@@ -1,4 +1,8 @@
-export NARF_BASE=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+SCRIPT_FILE_REL_PATH="${BASH_SOURCE[0]}"
+if [[ "$SCRIPT_FILE_REL_PATH" == "" ]]; then
+  SCRIPT_FILE_REL_PATH="${(%):-%N}"
+fi
+export NARF_BASE=$( cd "$( dirname "${SCRIPT_FILE_REL_PATH}" )" && pwd )
 export PYTHONPATH="${NARF_BASE}:$PYTHONPATH"
 export EXTRA_CLING_ARGS="-O3"
 export XRD_PARALLELEVTLOOP="16"
