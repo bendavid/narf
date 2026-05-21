@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ranges>
+		
 namespace narf {
 
   template<typename T>
@@ -134,8 +136,8 @@ namespace narf {
             | std::views::transform([](auto const &it){ return *it; });
   }
 
-  template <template <typename> class C, class T>
-  auto range_to(T &range) {
+  template <template <typename> class C=ROOT::VecOps::RVec, class T>
+  auto range_to(T &&range) {
     using value_type = std::decay_t<decltype(*range.begin())>;
 
     C<value_type> res;

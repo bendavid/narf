@@ -6,8 +6,10 @@
 #include "traits.hpp"
 #include "utils.hpp"
 #include "atomic_adaptor.hpp"
+#include "sparse_histogram.hpp"
 #include "tensorutils.hpp"
 #include "tensorevalutils.hpp"
+#include "rdfutils.hpp"
 #include <ROOT/RResultPtr.hxx>
 #include <ROOT/TThreadExecutor.hxx>
 #include <iostream>
@@ -616,26 +618,67 @@ namespace narf {
   // Helper which facilitates conversion from value to quantile for a single variable
   // The underlying histogram holds a tensor with the bin edges for the quantiles in the last variable,
   // conditional on all the previous variables
-  template <typename Storage, typename... Axes>
-  class QuantileHelper : public HistHelper<Storage, Axes...> {
+  /// Look up the quantile bin for `val` in the sorted edge array [begin, end).
+  ///
+  /// Edge layout is the same in both modes: the ``n`` stored edges are
+  /// ``[val_min, e_0, e_1, ..., e_{N-1}]`` where ``val_min`` is the left
+  /// boundary of the first quantile bin (where ``CDF = 0``) and
+  /// ``e_k = edges[k+1]`` is the right boundary of the ``k``-th quantile
+  /// bin. So ``nbins = n - 1`` quantile bins are encoded by ``n`` edges.
+  ///
+  /// * ``Continuous = false`` (integer mode): returns the clamped integer
+  ///   bin index ``i ∈ [0, nbins - 1]``.
+  ///
+  /// * ``Continuous = true`` (continuous CDF mode): returns a CDF-style
+  ///   double in ``[0, 1)`` obtained by linear interpolation on segment
+  ///   ``i`` (from ``edges[i]`` at ``CDF = i/nbins`` to ``edges[i+1]`` at
+  ///   ``CDF = (i+1)/nbins``). Every bin — including the first and last —
+  ///   gets its own dedicated slope.
+  template <bool Continuous, typename It, typename T>
+  auto quantile_lookup(It begin, It end, const T &val) {
+    const auto n = std::distance(begin, end);
+    auto const upper = std::upper_bound(begin, end, val);
+    auto const iquant = std::distance(begin, upper);
+    const std::ptrdiff_t nbins = n - 1;
+    auto const i = std::clamp<std::ptrdiff_t>(iquant - 1, 0, nbins - 1);
+    if constexpr (Continuous) {
+      auto const lo = *(begin + i);
+      auto const hi = *(begin + i + 1);
+      // Guard against degenerate (collapsed) bins where hi == lo.
+      double const frac = (hi != lo) ? double(val - lo) / double(hi - lo) : 0.5;
+      double const res = (double(i) + frac) / double(nbins);
+      return std::clamp(res, 0.0, std::nextafter(1.0, 0.0));
+    } else {
+      return static_cast<boost::histogram::axis::index_type>(i);
+    }
+  }
+
+  template <typename Storage, bool Continuous, typename... Axes>
+  class QuantileHelperImpl : public HistHelper<Storage, Axes...> {
     using base_t = HistHelper<Storage, Axes...>;
     using hist_t = typename base_t::hist_t;
     using scalar_t = typename Storage::value_type::tensor_t::Scalar;
     static constexpr auto nquants = Storage::value_type::size;
 
   public:
-    QuantileHelper(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
+    QuantileHelperImpl(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
 
-    boost::histogram::axis::index_type operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) {
+    auto operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) const {
       auto const &hist = *base_t::resourceHist_;
       auto const &edges = narf::get_value(hist, args...).data();
-
-      // find the quantile bin corresponding to the last argument
-      auto const upper = std::upper_bound(edges.data(), edges.data()+nquants, last);
-      auto const iquant = std::distance(edges.data(), upper);
-      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, nquants-1);
+      return quantile_lookup<Continuous>(edges.data(), edges.data() + nquants, last);
     }
   };
+
+  // MapWrapper<TensorMapWrapper<Impl>> so that:
+  //  - RVec arguments are broadcast element-wise (MapWrapper)
+  //  - Eigen tensor arguments are broadcast element-wise (TensorMapWrapper)
+  //  - scalar arguments call through directly
+  template <typename Storage, typename... Axes>
+  using QuantileHelper = MapWrapper<TensorMapWrapper<QuantileHelperImpl<Storage, false, Axes...>>>;
+
+  template <typename Storage, typename... Axes>
+  using QuantileHelperContinuous = MapWrapper<TensorMapWrapper<QuantileHelperImpl<Storage, true, Axes...>>>;
 
   // CTAD doesn't work reliably from cppyy so add factory function
   template <typename Storage, typename... Axes>
@@ -644,24 +687,33 @@ namespace narf {
     return QuantileHelper<Storage, Axes...>(std::forward<hist_t>(h));
   }
 
+  template <typename Storage, typename... Axes>
+  QuantileHelperContinuous<Storage, Axes...> make_quantile_helper_continuous(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+    return QuantileHelperContinuous<Storage, Axes...>(std::forward<hist_t>(h));
+  }
+
   // simple version for static quantiles
-  template<std::size_t N>
-  class QuantileHelperStatic {
+  template<std::size_t N, bool Continuous = false>
+  class QuantileHelperStaticImpl {
   public:
     using edge_t = std::array<double, N>;
 
-    QuantileHelperStatic(const edge_t &edges) : edges_(edges) {}
+    QuantileHelperStaticImpl(const edge_t &edges) : edges_(edges) {}
 
-    boost::histogram::axis::index_type operator() (double val) {
-      // find the quantile bin corresponding to the last argument
-      auto const upper = std::upper_bound(edges_.begin(), edges_.end(), val);
-      auto const iquant = std::distance(edges_.begin(), upper);
-      return std::clamp<boost::histogram::axis::index_type>(iquant, 0, N-1);
+    auto operator() (double val) const {
+      return quantile_lookup<Continuous>(edges_.begin(), edges_.end(), val);
     }
 
   private:
     const edge_t edges_;
   };
+
+  template<std::size_t N>
+  using QuantileHelperStatic = MapWrapper<TensorMapWrapper<QuantileHelperStaticImpl<N, false>>>;
+
+  template<std::size_t N>
+  using QuantileHelperStaticContinuous = MapWrapper<TensorMapWrapper<QuantileHelperStaticImpl<N, true>>>;
 
   /// Computes the minimum-variance reweighting to approximate a shift
   /// or smearing in the underlying variables of a multidimensional histogram.
@@ -670,10 +722,10 @@ namespace narf {
   /// summing over the contribution from each axis
 
   template<typename... Axes>
-  class HistShiftHelper {
+  class HistShiftHelperImpl {
   public:
-    HistShiftHelper(const Axes&... axes) : axes_(axes...) {}
-    HistShiftHelper(Axes&&... axes) : axes_(std::move(axes)...) {}
+    HistShiftHelperImpl(const Axes&... axes) : axes_(axes...) {}
+    HistShiftHelperImpl(Axes&&... axes) : axes_(std::move(axes)...) {}
 
     template <typename... Args>
     auto operator()(const Args&... args) const {
@@ -714,39 +766,6 @@ namespace narf {
     /// Core computation dispatched over axis indices.
     template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
     auto compute(const Nominal& orig,
-                   const Shifted& shifted,
-                   const SmearShifted& smear_shifted,
-                   const Weight& nominal_weight,
-                   std::index_sequence<Is...> idxs) const {
-
-      constexpr bool is_container_any = (is_container<std::tuple_element_t<Is, Nominal>> || ...);
-
-      if constexpr(is_container_any) {
-        auto make_range_of_tuples = [](auto const&...xs){ return make_zip_view(make_view(xs)...); };
-
-        auto const orig_v = std::apply(make_range_of_tuples, orig);
-        auto const shifted_v = std::apply(make_range_of_tuples, shifted);
-        auto const smear_shifted_v = std::apply(make_range_of_tuples, smear_shifted);
-
-        auto compute_elem_impl = [this, &nominal_weight, &idxs](auto &orig_elem, auto &shifted_elem, auto&smear_shifted_elem) {
-          return compute_impl(orig_elem, shifted_elem, smear_shifted_elem, nominal_weight, idxs);
-        };
-        auto compute_elem = [&compute_elem_impl](auto const &elem_tuple) { return std::apply(compute_elem_impl, elem_tuple); };
-
-        auto const res_view = make_zip_view(orig_v, shifted_v, smear_shifted_v)
-                              | std::views::transform(compute_elem);
-
-        auto const res = range_to<ROOT::VecOps::RVec>(res_view);
-        return res;
-      }
-      else {
-        return compute_impl(orig, shifted, smear_shifted, nominal_weight, idxs);
-      }
-    }
-
-    /// Core computation dispatched over axis indices.
-    template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
-    auto compute_impl(const Nominal& orig,
                  const Shifted& shifted,
                  const SmearShifted& smear_shifted,
                  const Weight& nominal_weight,
@@ -806,9 +825,11 @@ namespace narf {
         // will probably have to return u,d,s individually with more complicated logic
         // in the calling layer to do the matrix multiplication
 
-        // Underflow / overflow: no reliable bin geometry, return no correction.
+        // Underflow / overflow or degenerate bin geometry (e.g. infinite bin
+        // edge): no reliable bin geometry, return no correction.
         // (note that a is infinity in this case such that delta and v are also zero)
-        const bool flow = bin_idx < 0 || bin_idx >= ax.size();
+        const bool degenerate = !std::isfinite(a) || !std::isfinite(x_c);
+        const bool flow = bin_idx < 0 || bin_idx >= ax.size() || degenerate;
 
         auto const u = flow ? 0.*x_orig : (x_orig - x_c)/a;
         auto const delta = (x_shifted - x_orig)/a;
@@ -838,12 +859,18 @@ namespace narf {
     const std::tuple<Axes...> axes_;
   };
 
+  /// Public helper: MapWrapper around HistShiftHelperImpl so container
+  /// arguments are automatically broadcast/zipped element-wise, while scalar
+  /// arguments are passed through directly.
+  template<typename... Axes>
+  using HistShiftHelper = MapWrapper<HistShiftHelperImpl<Axes...>>;
+
   // factory function needed because CTAD doesn't work reliably from cppyy
   // also the trailing return type is needed because cppyy has issues with auto
   // return types
   template <typename... Axes>
   HistShiftHelper<std::decay_t<Axes>...> make_hist_shift_helper(Axes&&... axes) {
-    return HistShiftHelper(std::forward<Axes>(axes)...);
+    return HistShiftHelper<std::decay_t<Axes>...>(std::forward<Axes>(axes)...);
   }
 }
 

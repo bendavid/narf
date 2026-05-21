@@ -1,6 +1,8 @@
 #ifndef NARF_ONNXUTILS_H
 #define NARF_ONNXUTILS_H
 
+#include <tbb/task_arena.h>
+
 #include "onnxruntime/onnxruntime_cxx_api.h"
 #include "traits.hpp"
 
@@ -65,11 +67,20 @@ namespace narf {
     }
 
     template<typename input_t, typename output_t>
-    void operator() (unsigned int slot, input_t &inputs, output_t &outputs) {
+    void operator() (input_t &inputs, output_t &outputs) {
+      // Slot indexed by the TBB task arena thread index rather than
+      // RDataFrame's per-graph slot. RDataFrame slots are not unique
+      // across multiple RDataFrame loops scheduled by ``RunGraphs`` in
+      // the same task arena, whereas the TBB thread index is.
+      auto const tbb_slot = std::max(tbb::v1::this_task_arena::current_thread_index(), 0);
 
-      Ort::Session &session = sessions_[slot];
-      auto &inputValues = inputValues_[slot];
-      auto &outputValues = outputValues_[slot];
+      if (static_cast<std::size_t>(tbb_slot) >= sessions_.size()) {
+        throw std::runtime_error("Not enough sessions allocated for number of tbb threads");
+      }
+
+      Ort::Session &session = sessions_[tbb_slot];
+      auto &inputValues = inputValues_[tbb_slot];
+      auto &outputValues = outputValues_[tbb_slot];
 
       using Eigen::TensorMap;
       using Eigen::Tensor;
@@ -117,11 +128,6 @@ namespace narf {
 
     }
 
-    template<typename input_t, typename output_t>
-    void operator() (input_t &inputs, output_t &outputs) {
-      return operator()(0, inputs, outputs);
-    }
-
   private:
     Ort::Env env_;
     Ort::MemoryInfo meminfo_;
@@ -166,7 +172,14 @@ namespace narf {
     }
 
     template<typename input_t, typename output_t>
-    void operator() (unsigned int slot, input_t &inputs, output_t &outputs) {
+    void operator() (input_t &inputs, output_t &outputs) {
+      // Slot indexed by the TBB task arena thread index; see
+      // onnx_helper::operator() for rationale.
+      auto const tbb_slot = std::max(tbb::v1::this_task_arena::current_thread_index(), 0);
+
+      if (static_cast<std::size_t>(tbb_slot) >= sessions_.size()) {
+        throw std::runtime_error("Not enough sessions allocated for number of tbb threads");
+      }
 
       auto get_tensors_with_shapes = [](auto&... tensors) {
         auto get_shape = [](const auto &tensor) {
@@ -188,7 +201,7 @@ namespace narf {
       auto inputValues = std::apply(get_values, inputs_with_shapes);
       auto outputValues = std::apply(get_values, outputs_with_shapes);
 
-      Ort::Session &session = sessions_[slot];
+      Ort::Session &session = sessions_[tbb_slot];
 
       session.Run(Ort::RunOptions{nullptr},
               inputNames_.data(),
@@ -197,11 +210,6 @@ namespace narf {
               outputNames_.data(),
               outputValues.data(),
               outputNames_.size());
-    }
-
-    template<typename input_t, typename output_t>
-    void operator() (input_t &inputs, output_t &outputs) {
-      return operator()(0, inputs, outputs);
     }
 
   private:
