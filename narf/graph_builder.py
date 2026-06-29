@@ -1,5 +1,5 @@
 import ROOT
-from .lumitools import make_lumihelper, make_jsonhelper
+from .lumitools import make_dedup_lumihelper, make_jsonhelper
 from wums.ioutils import H5PickleProxy
 import time
 import uuid
@@ -58,7 +58,7 @@ def build_and_run(datasets, build_function, lumi_tree = "LuminosityBlocks", even
                 chain.Add(fpath)
             chains.append(chain)
             print("making lumi helper")
-            lumihelper = make_lumihelper(dataset.lumi_csv)
+            lumihelper = make_dedup_lumihelper(dataset.lumi_csv)
             print("making df")
             lumidf = ROOT.ROOT.RDataFrame(chain)
             lumidfs.append(lumidf)
