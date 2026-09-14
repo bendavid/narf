@@ -2,15 +2,21 @@
 #define NARF_HISTUTILS_H
 
 #include <boost/histogram.hpp>
+#include <boost/range/combine.hpp>
 #include "traits.hpp"
+#include "utils.hpp"
 #include "atomic_adaptor.hpp"
+#include "sparse_histogram.hpp"
 #include "tensorutils.hpp"
+#include "tensorevalutils.hpp"
+#include "rdfutils.hpp"
 #include <ROOT/RResultPtr.hxx>
 #include <ROOT/TThreadExecutor.hxx>
 #include <iostream>
 #include <eigen3/Eigen/Dense>
 #include <eigen3/unsupported/Eigen/CXX11/Tensor>
 #include "oneapi/tbb.h"
+#include <ranges>
 
 namespace narf {
   using namespace boost::histogram;
@@ -172,10 +178,10 @@ namespace narf {
     public:
 
       using iterator_category = std::forward_iterator_tag;
-      using value_type = value_iterator_t::value_type;
-      using difference_type = value_iterator_t::difference_type;
-      using pointer = value_iterator_t::pointer;
-      using reference = value_iterator_t::reference;
+      using value_type = typename value_iterator_t::value_type;
+      using difference_type = typename value_iterator_t::difference_type;
+      using pointer = typename value_iterator_t::pointer;
+      using reference = typename value_iterator_t::reference;
 
       iterator(HIST &hist, std::size_t idx) : indices_(unlinearize_index(hist, idx)),
         indices_begin_(HIST::multi_index_type::create(hist.rank())),
@@ -584,6 +590,288 @@ namespace narf {
       return get_value_impl(hist, std::index_sequence_for<Xs...>{}, xs...);
   }
 
+  // Helper which holds a histogram and facilitates bin content lookup
+  // RDataFrame still needs explicit non-templated operator() arguments for now
+  template <typename Storage, typename... Axes>
+  class HistHelper {
+  protected:
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+
+  public:
+    HistHelper(hist_t &&resource) : resourceHist_(std::make_shared<const hist_t>(std::move(resource))) {}
+
+    auto operator()(const boost::histogram::axis::traits::value_type<Axes>&... args) {
+      return narf::get_value(*resourceHist_, args...);
+    }
+
+  protected:
+    std::shared_ptr<const hist_t> resourceHist_;
+  };
+
+  // CTAD doesn't work reliably from cppyy so add factory function
+  template <typename Storage, typename... Axes>
+  HistHelper<Storage, Axes...> make_hist_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+    return HistHelper(std::forward<hist_t>(h));
+  }
+
+  // Helper which facilitates conversion from value to quantile for a single variable
+  // The underlying histogram holds a tensor with the bin edges for the quantiles in the last variable,
+  // conditional on all the previous variables
+  /// Look up the quantile bin for `val` in the sorted edge array [begin, end).
+  ///
+  /// Edge layout is the same in both modes: the ``n`` stored edges are
+  /// ``[val_min, e_0, e_1, ..., e_{N-1}]`` where ``val_min`` is the left
+  /// boundary of the first quantile bin (where ``CDF = 0``) and
+  /// ``e_k = edges[k+1]`` is the right boundary of the ``k``-th quantile
+  /// bin. So ``nbins = n - 1`` quantile bins are encoded by ``n`` edges.
+  ///
+  /// * ``Continuous = false`` (integer mode): returns the clamped integer
+  ///   bin index ``i ∈ [0, nbins - 1]``.
+  ///
+  /// * ``Continuous = true`` (continuous CDF mode): returns a CDF-style
+  ///   double in ``[0, 1)`` obtained by linear interpolation on segment
+  ///   ``i`` (from ``edges[i]`` at ``CDF = i/nbins`` to ``edges[i+1]`` at
+  ///   ``CDF = (i+1)/nbins``). Every bin — including the first and last —
+  ///   gets its own dedicated slope.
+  template <bool Continuous, typename It, typename T>
+  auto quantile_lookup(It begin, It end, const T &val) {
+    const auto n = std::distance(begin, end);
+    auto const upper = std::upper_bound(begin, end, val);
+    auto const iquant = std::distance(begin, upper);
+    const std::ptrdiff_t nbins = n - 1;
+    auto const i = std::clamp<std::ptrdiff_t>(iquant - 1, 0, nbins - 1);
+    if constexpr (Continuous) {
+      auto const lo = *(begin + i);
+      auto const hi = *(begin + i + 1);
+      // Guard against degenerate (collapsed) bins where hi == lo.
+      double const frac = (hi != lo) ? double(val - lo) / double(hi - lo) : 0.5;
+      double const res = (double(i) + frac) / double(nbins);
+      return std::clamp(res, 0.0, std::nextafter(1.0, 0.0));
+    } else {
+      return static_cast<boost::histogram::axis::index_type>(i);
+    }
+  }
+
+  template <typename Storage, bool Continuous, typename... Axes>
+  class QuantileHelperImpl : public HistHelper<Storage, Axes...> {
+    using base_t = HistHelper<Storage, Axes...>;
+    using hist_t = typename base_t::hist_t;
+    using scalar_t = typename Storage::value_type::tensor_t::Scalar;
+    static constexpr auto nquants = Storage::value_type::size;
+
+  public:
+    QuantileHelperImpl(hist_t &&resource) : base_t(std::forward<hist_t>(resource)) {}
+
+    auto operator()(const boost::histogram::axis::traits::value_type<Axes>&... args, const scalar_t &last) const {
+      auto const &hist = *base_t::resourceHist_;
+      auto const &edges = narf::get_value(hist, args...).data();
+      return quantile_lookup<Continuous>(edges.data(), edges.data() + nquants, last);
+    }
+  };
+
+  // MapWrapper<TensorMapWrapper<Impl>> so that:
+  //  - RVec arguments are broadcast element-wise (MapWrapper)
+  //  - Eigen tensor arguments are broadcast element-wise (TensorMapWrapper)
+  //  - scalar arguments call through directly
+  template <typename Storage, typename... Axes>
+  using QuantileHelper = MapWrapper<TensorMapWrapper<QuantileHelperImpl<Storage, false, Axes...>>>;
+
+  template <typename Storage, typename... Axes>
+  using QuantileHelperContinuous = MapWrapper<TensorMapWrapper<QuantileHelperImpl<Storage, true, Axes...>>>;
+
+  // CTAD doesn't work reliably from cppyy so add factory function
+  template <typename Storage, typename... Axes>
+  QuantileHelper<Storage, Axes...> make_quantile_helper(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+    return QuantileHelper<Storage, Axes...>(std::forward<hist_t>(h));
+  }
+
+  template <typename Storage, typename... Axes>
+  QuantileHelperContinuous<Storage, Axes...> make_quantile_helper_continuous(boost::histogram::histogram<std::tuple<Axes...>, Storage> &&h) {
+    using hist_t = boost::histogram::histogram<std::tuple<Axes...>, Storage>;
+    return QuantileHelperContinuous<Storage, Axes...>(std::forward<hist_t>(h));
+  }
+
+  // simple version for static quantiles
+  template<std::size_t N, bool Continuous = false>
+  class QuantileHelperStaticImpl {
+  public:
+    using edge_t = std::array<double, N>;
+
+    QuantileHelperStaticImpl(const edge_t &edges) : edges_(edges) {}
+
+    auto operator() (double val) const {
+      return quantile_lookup<Continuous>(edges_.begin(), edges_.end(), val);
+    }
+
+  private:
+    const edge_t edges_;
+  };
+
+  template<std::size_t N>
+  using QuantileHelperStatic = MapWrapper<TensorMapWrapper<QuantileHelperStaticImpl<N, false>>>;
+
+  template<std::size_t N>
+  using QuantileHelperStaticContinuous = MapWrapper<TensorMapWrapper<QuantileHelperStaticImpl<N, true>>>;
+
+  /// Computes the minimum-variance reweighting to approximate a shift
+  /// or smearing in the underlying variables of a multidimensional histogram.
+  ///
+  /// The full event weight is  1 + sum_i w_i  (first-order approximation).
+  /// summing over the contribution from each axis
+
+  template<typename... Axes>
+  class HistShiftHelperImpl {
+  public:
+    HistShiftHelperImpl(const Axes&... axes) : axes_(axes...) {}
+    HistShiftHelperImpl(Axes&&... axes) : axes_(std::move(axes)...) {}
+
+    template <typename... Args>
+    auto operator()(const Args&... args) const {
+      auto const tup = std::forward_as_tuple(args...);
+      auto constexpr idxs = std::index_sequence_for<Axes...>{};
+      auto const nominal_args_tup = split_tuple(tup, idxs);
+      auto const shifted_args_tup = split_tuple<sizeof...(Axes)>(tup, idxs);
+      auto const smear_shifted_args_tup = split_tuple<2*sizeof...(Axes)>(tup, idxs);
+
+      if constexpr (sizeof...(args) > 3*sizeof...(Axes)) {
+        // weight has been provided
+        auto const &nominal_weight = std::get<3*sizeof...(Axes)>(tup);
+        return operator() (nominal_args_tup, shifted_args_tup, smear_shifted_args_tup, nominal_weight);
+      }
+      else {
+        // weight has not been provided
+        return operator() (nominal_args_tup, shifted_args_tup, smear_shifted_args_tup);
+      }
+    }
+
+    template <typename... Nominal, typename... Shifted, typename... ShiftedSmeared, typename Weight=double>
+    auto operator()(const std::tuple<Nominal...> &nominal,
+                    const std::tuple<Shifted...> &shifted,
+                    const std::tuple<ShiftedSmeared...> &shifted_smeared,
+                    const Weight &nominal_weight=1.) const {
+      return compute(nominal, shifted, shifted_smeared, nominal_weight, std::index_sequence_for<Axes...>{});
+    }
+
+
+
+  private:
+
+    template <std::size_t Offset = 0, typename Tuple, std::size_t... Is>
+    auto split_tuple(const Tuple &tup, std::index_sequence<Is...>) const {
+      return std::forward_as_tuple(std::get<Is+Offset>(tup)...);
+    }
+
+    /// Core computation dispatched over axis indices.
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Weight, std::size_t... Is>
+    auto compute(const Nominal& orig,
+                 const Shifted& shifted,
+                 const SmearShifted& smear_shifted,
+                 const Weight& nominal_weight,
+                 std::index_sequence<Is...>) const {
+
+
+      // FIXME it would be better to just accumulate directly using e.g. a wrapper
+      // of std::pair implement the + operator for element-wise addition
+      auto const weights = std::make_tuple(axis_weight(std::get<Is>(orig),
+                                      std::get<Is>(shifted),
+                                      std::get<Is>(smear_shifted),
+                                      std::get<Is>(axes_))...);
+
+      auto const first_order = (std::get<Is>(weights).first + ...);
+      auto const second_order = (std::get<Is>(weights).second + ...);
+
+      auto const res = (first_order + second_order*second_order + 1.)*nominal_weight;
+
+      // might be an unevaluated Eigen tensor expression, so force evaluation
+      return eval_if_tensor(res);
+    }
+
+    /// Per-axis weight correction.
+    ///
+    /// Returns 0 correction if the original value falls in an
+    /// underflow/overflow bin (no reliable bin geometry).
+    ///
+    template <typename Nominal, typename Shifted, typename SmearShifted, typename Axis>
+    auto axis_weight(const Nominal &x_orig,
+                           const Shifted &x_shifted,
+                           const SmearShifted& x_smear_shifted,
+                           const Axis &ax) const {
+
+      namespace traits = boost::histogram::axis::traits;
+
+      // the reweighting only makes sense for an ordered axis
+      constexpr bool continuous = traits::is_continuous<Axis>();
+
+      if constexpr(continuous) {
+
+        auto const bin_idx = ax.index(x_orig);
+
+        // Bin geometry via the axis bin view.
+        auto const a   = traits::width(ax, bin_idx);
+        auto const x_c = traits::value(ax, bin_idx + 0.5);
+
+        // for the general case complete weight is
+        // -12*d^T u + 144 u^T S u - 12 tr(S)
+        // with
+        // u = (x - bin_center)/width
+        // d = (shifted-orig)/width
+        // S = diag(invwidth) smearing_covariance (diag_invwidth)
+        // currently implemented for the simplified case where S = v v^T is rank 1 with
+        // v = (smear_shifted - orig)/width
+
+        // TODO to implement the more general covariance case in the future, this function
+        // will probably have to return u,d,s individually with more complicated logic
+        // in the calling layer to do the matrix multiplication
+
+        // Underflow / overflow or degenerate bin geometry (e.g. infinite bin
+        // edge): no reliable bin geometry, return no correction.
+        // (note that a is infinity in this case such that delta and v are also zero)
+        const bool degenerate = !std::isfinite(a) || !std::isfinite(x_c);
+        const bool flow = bin_idx < 0 || bin_idx >= ax.size() || degenerate;
+
+        auto const u = flow ? 0.*x_orig : (x_orig - x_c)/a;
+        auto const delta = (x_shifted - x_orig)/a;
+        auto const v = (x_smear_shifted - x_orig)/a;
+
+        auto const res_first = -12.*delta*u - 12.*v*v;
+        auto const res_second = 12.*v*u;
+
+        // might be an unevaluated Eigen tensor expression, so force evaluation
+        return std::make_pair(eval_if_tensor(res_first), eval_if_tensor(res_second));
+      }
+      else {
+        // weight correction is zero if values are equal, nan otherwise
+        // do this in a way which is compatible with element-wise operations in
+        // RVec, Eigen::Tensor, Eigen::Array, etc
+        auto const equal_first = x_shifted == x_orig;
+        auto const res_first = 0./equal_first;
+
+        auto const equal_second = x_smear_shifted == x_orig;
+        auto const res_second = 0./equal_second;
+
+        // might be an unevaluated Eigen tensor expression, so force evaluation
+        return std::make_pair(eval_if_tensor(res_first), eval_if_tensor(res_second));
+      }
+    }
+
+    const std::tuple<Axes...> axes_;
+  };
+
+  /// Public helper: MapWrapper around HistShiftHelperImpl so container
+  /// arguments are automatically broadcast/zipped element-wise, while scalar
+  /// arguments are passed through directly.
+  template<typename... Axes>
+  using HistShiftHelper = MapWrapper<HistShiftHelperImpl<Axes...>>;
+
+  // factory function needed because CTAD doesn't work reliably from cppyy
+  // also the trailing return type is needed because cppyy has issues with auto
+  // return types
+  template <typename... Axes>
+  HistShiftHelper<std::decay_t<Axes>...> make_hist_shift_helper(Axes&&... axes) {
+    return HistShiftHelper<std::decay_t<Axes>...>(std::forward<Axes>(axes)...);
+  }
 }
 
 // template <typename T, typename... Args>
@@ -600,3 +888,4 @@ namespace narf {
 
 
 #endif
+
