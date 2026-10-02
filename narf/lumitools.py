@@ -40,6 +40,34 @@ def make_lumihelper(filename):
     return make_brilcalc_helper(filename, value='recorded(/fb)', action=float)
 
 
+def make_dedup_lumihelper(filename):
+    """Like make_lumihelper but returns 0 for repeated (run, ls) pairs.
+
+    Use this when the LuminosityBlocks TChain contains duplicate entries
+    (e.g. low-PU NanoAOD where CRAB merges several MINIAOD input files per
+    output file, recording all their luminosity blocks even when they contain
+    no selected events).  The underlying C++ class uses a shared mutex so
+    deduplication is correct under ROOT's implicit multi-threading.
+    """
+    runs = []
+    lumis = []
+    vals = []
+
+    with open(filename) as lumicsv:
+        _ = next(lumicsv)
+        reader = csv.DictReader(lumicsv)
+        for row in reader:
+            if row['#run:fill'][0] == "#":
+                continue
+            run, _ = row['#run:fill'].split(":")
+            lumi, _ = row['ls'].split(":")
+            runs.append(int(run))
+            lumis.append(int(lumi))
+            vals.append(float(row['recorded(/fb)']))
+
+    return ROOT.DeduplicatingBrilcalcHelper(runs, lumis, vals)
+
+
 def make_timehelper(filename):
     action = lambda x: datetime.strptime(x, "%m/%d/%y %H:%M:%S").timestamp()
     return make_brilcalc_helper(filename, value='time', action=action)
