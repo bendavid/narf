@@ -1,4 +1,6 @@
 #include <unordered_map>
+#include <unordered_set>
+#include <mutex>
 #include <memory>
 #include <algorithm>
 #include <stdexcept>
@@ -35,6 +37,42 @@ public:
 private:
   std::shared_ptr<valuemap_t> valuemap_;
   
+};
+
+class DeduplicatingBrilcalcHelper {
+
+public:
+  using valuemap_t = std::unordered_map<std::pair<unsigned int, unsigned int>, double, RunLumiHash>;
+  using seenset_t = std::unordered_set<std::pair<unsigned int, unsigned int>, RunLumiHash>;
+
+  DeduplicatingBrilcalcHelper(const std::vector<unsigned int> &runs, const std::vector<unsigned int> &lumis, const std::vector<double> &lumivals) :
+  valuemap_(std::make_shared<valuemap_t>()),
+  seen_(std::make_shared<seenset_t>()),
+  mutex_(std::make_shared<std::mutex>()) {
+    for (unsigned int i = 0; i < lumivals.size(); ++i) {
+      valuemap_->insert(std::make_pair(std::make_pair(runs[i], lumis[i]), lumivals[i]));
+    }
+  }
+
+  // Returns the value only the first time a (run, lumi) pair is seen and 0
+  // afterwards. The seen set is shared between copies and never reset, so a
+  // helper is good for a single event loop: running it again sums to 0.
+  double operator () (unsigned int run, unsigned int lumi) {
+    auto key = std::make_pair(run, lumi);
+    std::lock_guard<std::mutex> lock(*mutex_);
+    if (!seen_->insert(key).second) return 0.0;
+    const auto it = valuemap_->find(key);
+    if (it != valuemap_->end()) {
+      return it->second;
+    }
+    throw std::runtime_error("lumi not found");
+  }
+
+private:
+  std::shared_ptr<valuemap_t> valuemap_;
+  std::shared_ptr<seenset_t> seen_;
+  std::shared_ptr<std::mutex> mutex_;
+
 };
 
 class JsonHelper {
