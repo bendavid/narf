@@ -8,7 +8,7 @@ import narf.clingutils
 narf.clingutils.Declare('#include "lumitools.hpp"')
 
 
-def make_brilcalc_helper(filename, value, action):
+def make_brilcalc_helper(filename, value, action, deduplicate=False):
     runs = []
     lumis = []
     vals = []
@@ -32,12 +32,21 @@ def make_brilcalc_helper(filename, value, action):
             lumis.append(lumi)
             vals.append(val)  
         
-    brilcalc_helper = ROOT.BrilcalcHelper(runs, lumis, vals)
+    helper_class = ROOT.DeduplicatingBrilcalcHelper if deduplicate else ROOT.BrilcalcHelper
+    brilcalc_helper = helper_class(runs, lumis, vals)
     return brilcalc_helper
 
 
 def make_lumihelper(filename):
-    return make_brilcalc_helper(filename, value='recorded(/fb)', action=float)
+    """Recorded luminosity per (run, ls), counting each pair only once.
+
+    The same lumisection can appear in the LuminosityBlocks tree of several
+    files when its events are split across them (as in the 2026 prompt
+    NanoAOD), so it is counted on its first appearance only. Without
+    duplicates this is identical to a plain lookup. The helper remembers what
+    it has seen, so make a new one for each event loop.
+    """
+    return make_brilcalc_helper(filename, value='recorded(/fb)', action=float, deduplicate=True)
 
 
 def make_timehelper(filename):
