@@ -8,7 +8,7 @@ import narf.clingutils
 narf.clingutils.Declare('#include "lumitools.hpp"')
 
 
-def make_brilcalc_helper(filename, value, action):
+def make_brilcalc_helper(filename, value, action, deduplicate=False):
     runs = []
     lumis = []
     vals = []
@@ -32,40 +32,21 @@ def make_brilcalc_helper(filename, value, action):
             lumis.append(lumi)
             vals.append(val)  
         
-    brilcalc_helper = ROOT.BrilcalcHelper(runs, lumis, vals)
+    helper_class = ROOT.DeduplicatingBrilcalcHelper if deduplicate else ROOT.BrilcalcHelper
+    brilcalc_helper = helper_class(runs, lumis, vals)
     return brilcalc_helper
 
 
 def make_lumihelper(filename):
-    return make_brilcalc_helper(filename, value='recorded(/fb)', action=float)
+    """Recorded luminosity per (run, ls), counting each pair only once.
 
-
-def make_dedup_lumihelper(filename):
-    """Like make_lumihelper but returns 0 for repeated (run, ls) pairs.
-
-    Use this when the LuminosityBlocks TChain contains duplicate entries
-    (e.g. low-PU NanoAOD where CRAB merges several MINIAOD input files per
-    output file, recording all their luminosity blocks even when they contain
-    no selected events).  The underlying C++ class uses a shared mutex so
-    deduplication is correct under ROOT's implicit multi-threading.
+    The same lumisection can appear in the LuminosityBlocks tree of several
+    files when its events are split across them (as in the 2026 prompt
+    NanoAOD), so it is counted on its first appearance only. Without
+    duplicates this is identical to a plain lookup. The helper remembers what
+    it has seen, so make a new one for each event loop.
     """
-    runs = []
-    lumis = []
-    vals = []
-
-    with open(filename) as lumicsv:
-        _ = next(lumicsv)
-        reader = csv.DictReader(lumicsv)
-        for row in reader:
-            if row['#run:fill'][0] == "#":
-                continue
-            run, _ = row['#run:fill'].split(":")
-            lumi, _ = row['ls'].split(":")
-            runs.append(int(run))
-            lumis.append(int(lumi))
-            vals.append(float(row['recorded(/fb)']))
-
-    return ROOT.DeduplicatingBrilcalcHelper(runs, lumis, vals)
+    return make_brilcalc_helper(filename, value='recorded(/fb)', action=float, deduplicate=True)
 
 
 def make_timehelper(filename):

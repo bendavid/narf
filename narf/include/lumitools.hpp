@@ -54,17 +54,18 @@ public:
     }
   }
 
+  // Returns the value only the first time a (run, lumi) pair is seen and 0
+  // afterwards. The seen set is shared between copies and never reset, so a
+  // helper is good for a single event loop: running it again sums to 0.
   double operator () (unsigned int run, unsigned int lumi) {
     auto key = std::make_pair(run, lumi);
     std::lock_guard<std::mutex> lock(*mutex_);
-    if (seen_->count(key) > 0) return 0.0;
-    seen_->insert(key);
+    if (!seen_->insert(key).second) return 0.0;
     const auto it = valuemap_->find(key);
     if (it != valuemap_->end()) {
       return it->second;
     }
     throw std::runtime_error("lumi not found");
-    return 0.;
   }
 
 private:
