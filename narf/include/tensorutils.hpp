@@ -104,15 +104,17 @@ public:
     return increment_impl(rhs, priority<1>{});
   }
 
-  template <typename... Us>
-  auto operator() (Us&&... xs) -> decltype((*data_.data())(std::forward<Us>(xs)...), void()) {
+  // V makes the call expression dependent on the template parameters of the member function, such that it is only checked
+  // on substitution (newer clang diagnoses calling a non-callable non-dependent type already when instantiating the class)
+  template <typename... Us, typename V = T>
+  auto operator() (Us&&... xs) -> decltype(std::declval<V&>()(std::forward<Us>(xs)...), void()) {
     for (T *it = data_.data(); it != data_.data() + size; ++it) {
       (*it)(std::forward<Us>(xs)...);
     }
   }
 
-  template <typename U, typename... Us>
-  auto operator() (const weight_t<U> &w, Us&&... xs) -> decltype((*data_.data())(weight(*w.value.data()), std::forward<Us>(xs)...), void()) {
+  template <typename U, typename... Us, typename V = T>
+  auto operator() (const weight_t<U> &w, Us&&... xs) -> decltype(std::declval<V&>()(weight(*w.value.data()), std::forward<Us>(xs)...), void()) {
     const U *itr = w.value.data();
     for (T *it = data_.data(); it != data_.data() + size; ++it, ++itr) {
       (*it)(weight(*itr), std::forward<Us>(xs)...);

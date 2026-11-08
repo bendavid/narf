@@ -81,7 +81,7 @@ def convert_axis(axis):
         cats = [axis.bin(icat) for icat in range(ncats)]
         return ROOT.narf.make_category_axis[ROOT.std.string, default, options](cats)
     elif isinstance(axis, bh.axis.Boolean):
-        return ROOT.boost.histogram.axis.boolean[""]()
+        return getattr(ROOT.boost.histogram.axis, "boolean<>")()
     else:
         raise TypeError("axis must be a boost_histogram or compatible axis")
 
@@ -381,10 +381,10 @@ def _convert_root_axis(axis):
         nbins = axis.GetNbins()
         xlow = axis.GetXmin()
         xhigh = axis.GetXmax()
-        return ROOT.boost.histogram.axis.regular[""](nbins, xlow, xhigh)
+        return getattr(ROOT.boost.histogram.axis, "regular<>")(nbins, xlow, xhigh)
     else:
         edges = [edge for edge in axis.GetXbins()]
-        return ROOT.boost.histogram.axis.variable[""](edges)
+        return getattr(ROOT.boost.histogram.axis, "variable<>")(edges)
 
 def _convert_root_hist(hist):
     axes = []
@@ -550,9 +550,9 @@ def hist_to_root(boost_hist):
 def _convert_root_axis_info(nbins, xlow, xhigh, edges):
 
     if edges:
-        return ROOT.boost.histogram.axis.variable[""](edges)
+        return getattr(ROOT.boost.histogram.axis, "variable<>")(edges)
     else:
-        return ROOT.boost.histogram.axis.regular[""](nbins, xlow, xhigh)
+        return getattr(ROOT.boost.histogram.axis, "regular<>")(nbins, xlow, xhigh)
 
 def _histo_with_boost(df, model, cols):
 
