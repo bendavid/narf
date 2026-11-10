@@ -274,7 +274,7 @@ def _histo_boost(df, name, axes, cols, storage = bh.storage.Weight(), force_atom
             tensor_scalar_type = traits.tensor_type.Scalar
             # TODO also/instead handle the case that tensor axes are in common and elements should be multiplied directly
             # instead of concatenating the axes?
-            tensor_shape.extend(traits.get_sizes())
+            tensor_shape.extend(traits.sizes)
 
     python_axes = axes.copy()
 
@@ -594,7 +594,7 @@ def _histo_with_boost(df, model, cols):
                 if axis_info[3]:
                     is_regular = False
 
-            for size in traits.get_sizes():
+            for size in traits.sizes:
                 if is_regular:
                     axes_info.append((size, -0.5, float(size) - 0.5, []))
                 else:

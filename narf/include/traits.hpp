@@ -43,9 +43,6 @@ struct tensor_traits<Eigen::TensorFixedSize<T, Eigen::Sizes<Indices...>, Options
   static constexpr std::array<std::ptrdiff_t, sizeof...(Indices)> sizes = { Indices... };
   using tensor_type = Eigen::TensorFixedSize<T, Eigen::Sizes<Indices...>, Options_, IndexType>;
   using value_type = T;
-
-  // needed for PyROOT/cppyy since it can't currently handle the static constexpr member directly
-  static constexpr std::array<std::ptrdiff_t, sizeof...(Indices)> get_sizes() { return sizes; }
 };
 
 template <typename T>

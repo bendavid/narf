@@ -866,10 +866,8 @@ namespace narf {
   using HistShiftHelper = MapWrapper<HistShiftHelperImpl<Axes...>>;
 
   // factory function needed because CTAD doesn't work reliably from cppyy
-  // also the trailing return type is needed because cppyy has issues with auto
-  // return types
   template <typename... Axes>
-  HistShiftHelper<std::decay_t<Axes>...> make_hist_shift_helper(Axes&&... axes) {
+  auto make_hist_shift_helper(Axes&&... axes) {
     return HistShiftHelper<std::decay_t<Axes>...>(std::forward<Axes>(axes)...);
   }
 }
